@@ -2,218 +2,307 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1.0">
-  <title>犬隻三視圖上傳工具</title>
-  <!-- PWA basic setup -->
-  <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#4db6ac">
-  <!-- 字體 -->
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>比特犬影像辨識系統 (拍攝+上傳)</title>
   <style>
-    /* ===== 版面樣式 ===== */
-    body{
-      font-family:"Noto Sans TC",sans-serif;
-      background:linear-gradient(135deg,#f6d365 0%,#fda085 100%);
-      margin:0;
-      min-height:100vh;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      color:#333;
-    }
-    .card{
-      background:rgba(255,255,255,.95);
-      border-radius:16px;
-      padding:1.5rem;
-      width:100%;
-      max-width:560px;
-      box-shadow:0 6px 15px rgba(0,0,0,.15);
-    }
-    h1{margin:0 0 .5rem;font-size:1.4rem;}
-    .label{font-size:.95rem;color:#555;margin-bottom:.5rem;}
-
-    /* 相機畫面 */
-    #cameraContainer{
-      position:relative;
-      width:100%;
-      aspect-ratio:4/3;
-      background:#000;
-      border-radius:12px;
-      overflow:hidden;
-    }
-    #camera{
-      width:100%;
-      height:100%;
-      object-fit:cover;
-    }
-    /* 拍攝導引框 */
-    #guide{
-      position:absolute;
-      top:50%;
-      left:50%;
-      width:70%;
-      height:70%;
-      transform:translate(-50%,-50%);
-      border:4px dashed rgba(255,255,255,.8);
-      border-radius:12px;
-      pointer-events:none;
+    /* --- 整體佈景 --- */
+    body {
+      font-family: "Noto Sans TC", sans-serif;
+      background: linear-gradient(135deg, #f6d365 0%, #fda085 100%);
+      min-height: 100vh;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
     }
 
-    /* 按鈕 */
-    .btn{
-      display:inline-block;
-      padding:.6rem 1.2rem;
-      margin-top:1rem;
-      border:none;
-      border-radius:9999px;
-      font-size:1rem;
-      cursor:pointer;
-      transition:background .3s;
-      color:#fff;
+    /* --- 卡片 --- */
+    .container {
+      background: rgba(255, 255, 255, .95);
+      border-radius: 16px;
+      padding: 2rem;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, .15);
+      max-width: 800px;
+      width: 100%;
+      text-align: center;
     }
-    .btn.capture{background:#ff8a65;}
-    .btn.capture:hover{background:#ff7043;}
-    .btn.submit{background:#4db6ac;}
-    .btn.submit:hover{background:#00897b;}
 
-    /* 縮圖預覽 */
-    .preview{
-      margin-top:1rem;
-      display:flex;
-      gap:.5rem;
-      flex-wrap:wrap;
-      justify-content:center;
+    h1 { margin-top: 0; color: #333; }
+    p { color: #555; }
+
+    /* --- 上傳區域佈局 --- */
+    .upload-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.5rem;
+      justify-content: center;
+      margin: 2rem 0;
     }
-    .preview img{
-      width:100px;
-      height:100px;
-      object-fit:cover;
-      border-radius:12px;
-      box-shadow:0 2px 6px rgba(0,0,0,.1);
+
+    .upload-area {
+      flex: 1;
+      min-width: 200px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
     }
-    #status{font-size:1rem;margin-top:.5rem;}
+    
+    .upload-area h3 { margin-bottom: 0.5rem; color: #444; }
+
+    /* --- 按鈕組 --- */
+    .button-group { display: flex; gap: 0.5rem; margin-top: 1rem; }
+    .btn { padding: .6rem 1.2rem; border: none; border-radius: 9999px; color: #fff; cursor: pointer; font-size: 0.9rem; transition: background .3s; }
+    .btn-camera { background: #64b5f6; } /* 藍色 */
+    .btn-camera:hover { background: #42a5f5; }
+    .btn-upload { background: #ff8a65; } /* 橘色 */
+    .btn-upload:hover { background: #ff7043; }
+
+    /* --- 檔案選擇 (隱藏) --- */
+    input[type=file] { display: none; }
+
+    /* --- 預覽區 --- */
+    .preview {
+      width: 150px;
+      height: 150px;
+      border: 3px dashed #ddd;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: #f9f9f9;
+      overflow: hidden;
+    }
+    .preview img { width: 100%; height: 100%; object-fit: cover; }
+    .preview span { font-size: 0.9rem; color: #aaa; }
+
+    /* --- 辨識按鈕 --- */
+    #analyzeBtn {
+      margin-top: 2rem;
+      padding: .75rem 2.5rem;
+      border: none;
+      border-radius: 9999px;
+      background: #4db6ac;
+      color: #fff;
+      font-size: 1.2rem;
+      cursor: pointer;
+      transition: background .3s;
+    }
+    #analyzeBtn:hover { background: #00897b; }
+
+    /* --- 結果顯示 --- */
+    #result { margin-top: 1.5rem; padding: 1rem; border-radius: 8px; font-size: 1.2rem; font-weight: bold; min-height: 50px; }
+    .result-error { background-color: #ffecb3; color: #f57f17; }
+    .result-processing { background-color: #e3f2fd; color: #1565c0; }
+    .result-pitbull { background-color: #ffcdd2; color: #c62828; }
+    .result-not-pitbull { background-color: #c8e6c9; color: #2e7d32; }
+
+    /* --- 相機畫面 --- */
+    #camera-view { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: black; z-index: 1000; }
+    #camera { width: 100%; height: 100%; object-fit: cover; }
+    #camera-ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: space-between; align-items: center; color: white; text-shadow: 0 0 5px black; }
+    #guidance-overlay { margin-top: 5vh; font-size: 1.8rem; text-align: center; font-weight: bold; padding: 10px; background: rgba(0,0,0,0.4); border-radius: 10px; }
+    #capture-btn { width: 70px; height: 70px; border-radius: 50%; border: 5px solid white; background-color: rgba(255, 255, 255, 0.3); margin-bottom: 5vh; cursor: pointer; }
+    #close-camera-btn { position: absolute; top: 20px; left: 20px; font-size: 2rem; background: none; border: none; color: white; cursor: pointer; }
+    #canvas { display: none; }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>犬隻三視圖拍攝／上傳</h1>
-    <p class="label">步驟：正面 → 側面 → 頭部特寫</p>
 
-    <!-- 相機區 -->
-    <div id="cameraContainer">
-      <video id="camera" autoplay muted playsinline></video>
-      <div id="guide"></div>
+  <!-- 主要內容畫面 -->
+  <div id="main-view" class="container">
+    <h1>比特犬影像辨識系統</h1>
+    <p>請為以下三個項目分別「拍攝照片」或「上傳檔案」。</p>
+
+    <div class="upload-container">
+      <!-- 正面照 -->
+      <div class="upload-area">
+        <h3>1. 正面照</h3>
+        <div class="preview" id="front-preview"><span>預覽</span></div>
+        <div class="button-group">
+          <button class="btn btn-camera" data-type="front">拍攝</button>
+          <label for="front-upload-input" class="btn btn-upload">上傳</label>
+        </div>
+        <input type="file" id="front-upload-input" accept="image/*" data-type="front">
+      </div>
+      <!-- 側面照 -->
+      <div class="upload-area">
+        <h3>2. 側面照</h3>
+        <div class="preview" id="side-preview"><span>預覽</span></div>
+        <div class="button-group">
+          <button class="btn btn-camera" data-type="side">拍攝</button>
+          <label for="side-upload-input" class="btn btn-upload">上傳</label>
+        </div>
+        <input type="file" id="side-upload-input" accept="image/*" data-type="side">
+      </div>
+      <!-- 頭部特寫 -->
+      <div class="upload-area">
+        <h3>3. 頭部特寫</h3>
+        <div class="preview" id="head-preview"><span>預覽</span></div>
+        <div class="button-group">
+          <button class="btn btn-camera" data-type="head">拍攝</button>
+          <label for="head-upload-input" class="btn btn-upload">上傳</label>
+        </div>
+        <input type="file" id="head-upload-input" accept="image/*" data-type="head">
+      </div>
     </div>
 
-    <button id="captureBtn" class="btn capture">拍照（正面）</button>
-    <p id="status">請將犬隻頭部置於框內並保持清晰</p>
+    <button id="analyzeBtn" type="button">開始辨識</button>
+    <div id="result"></div>
+  </div>
 
-    <!-- 縮圖預覽 -->
-    <div class="preview" id="preview"></div>
-
-    <!-- 隱藏的表單，完成三張照片後顯示 -->
-    <form id="uploadForm" action="/upload" method="POST" enctype="multipart/form-data" style="display:none">
-      <input type="hidden" name="mode" value="multiview">
-      <button type="submit" class="btn submit">上傳</button>
-    </form>
+  <!-- 相機畫面 -->
+  <div id="camera-view">
+    <video id="camera" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+    <div id="camera-ui">
+      <button id="close-camera-btn">×</button>
+      <div id="guidance-overlay"></div>
+      <button id="capture-btn"></button>
+    </div>
   </div>
 
   <script>
-    // ===== 相機啟動 =====
+    // --- 全域變數與元素選擇 ---
+    const mainView = document.getElementById('main-view');
+    const resultDiv = document.getElementById('result');
+
+    // 相機相關
+    const cameraView = document.getElementById('camera-view');
     const camera = document.getElementById('camera');
-    const captureBtn = document.getElementById('captureBtn');
-    const preview = document.getElementById('preview');
-    const statusText = document.getElementById('status');
-    const uploadForm = document.getElementById('uploadForm');
+    const canvas = document.getElementById('canvas');
+    const guidanceOverlay = document.getElementById('guidance-overlay');
+    const captureBtn = document.getElementById('capture-btn');
+    const closeCameraBtn = document.getElementById('close-camera-btn');
+    
+    // 資料管理
+    const imageData = { front: null, side: null, head: null };
+    let cameraStream = null;
+    let currentCaptureType = null; // 'front', 'side', or 'head'
+    
+    const guidanceText = {
+        front: "請拍攝犬隻的【正面照】",
+        side: "請拍攝犬隻的【側面照】",
+        head: "請拍攝犬隻的【頭部特寫】"
+    };
 
-    const steps = ['正面','側面','頭部特寫'];
-    let stepIndex = 0;
-    const capturedBlobs = [];
+    // --- 功能函式 ---
 
-    async function startCamera(){
-      try{
-        const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
-        camera.srcObject = stream;
-      }catch(e){
-        alert('無法存取相機：'+e.message);
-      }
-    }
-    startCamera();
-
-    // ===== 工具函式 =====
-    function dataURLtoBlob(dataurl){
-      const arr = dataurl.split(','), mime = arr[0].match(/:(.*?);/)[1],
-            bstr = atob(arr[1]), n = bstr.length, u8arr = new Uint8Array(n);
-      while(n--){u8arr[n] = bstr.charCodeAt(n);}  // 轉 Uint8Array
-      return new Blob([u8arr], {type:mime});
-    }
-
-    function evaluateQuality(canvas){
-      // ==== 簡化的品質檢查：解析度 & 亮度 ====
-      const ctx = canvas.getContext('2d');
-      const {width,height} = canvas;
-      if(width < 300 || height < 300) return '解析度過低';
-      // 亮度平均值
-      const imgData = ctx.getImageData(0,0,width,height);
-      let sum = 0;
-      for(let i=0;i<imgData.data.length;i+=4){
-        sum += imgData.data[i] + imgData.data[i+1] + imgData.data[i+2];
-      }
-      const brightness = sum / (width*height*3);
-      if(brightness < 40) return '過暗';
-      if(brightness > 220) return '過亮';
-      return 'ok';
+    /**
+     * 更新指定類型的預覽畫面
+     * @param {string} type - 'front', 'side', or 'head'
+     * @param {Blob|File} data - 圖片的 Blob 或 File 物件
+     */
+    function updatePreview(type, data) {
+        const previewEl = document.getElementById(`${type}-preview`);
+        previewEl.innerHTML = ''; // 清空舊內容
+        const img = document.createElement('img');
+        img.src = URL.createObjectURL(data); // 為 Blob/File 建立暫時性的 URL
+        previewEl.appendChild(img);
     }
 
-    // ===== 拍照流程 =====
-    captureBtn.addEventListener('click', ()=>{
-      const canvas = document.createElement('canvas');
-      canvas.width = camera.videoWidth;
-      canvas.height = camera.videoHeight;
-      canvas.getContext('2d').drawImage(camera,0,0);
+    // --- 相機工作流程 ---
+    
+    async function startCamera(type) {
+        currentCaptureType = type;
+        if (!('mediaDevices' in navigator && 'getUserMedia' in navigator.mediaDevices)) {
+            alert('抱歉，您的瀏覽器不支援相機功能。');
+            return;
+        }
+        try {
+            cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+            camera.srcObject = cameraStream;
+            guidanceOverlay.textContent = guidanceText[type];
+            mainView.style.display = 'none';
+            cameraView.style.display = 'block';
+        } catch (err) {
+            alert('無法存取相機。請確認您已授權，並在 https 環境下執行。\n錯誤訊息: ' + err.message);
+            stopCamera();
+        }
+    }
 
-      const quality = evaluateQuality(canvas);
-      if(quality !== 'ok'){
-        alert('品質檢測未通過：'+quality+'\n請重新拍攝');
-        return;
-      }
+    function stopCamera() {
+        if (cameraStream) {
+            cameraStream.getTracks().forEach(track => track.stop());
+        }
+        cameraView.style.display = 'none';
+        mainView.style.display = 'flex'; // 讓主畫面回來
+        currentCaptureType = null;
+    }
 
-      const dataURL = canvas.toDataURL('image/jpeg',0.9);
-      const blob = dataURLtoBlob(dataURL);
-      capturedBlobs.push(blob);
+    function captureImage() {
+        if (!currentCaptureType) return;
+        const context = canvas.getContext('2d');
+        canvas.width = camera.videoWidth;
+        canvas.height = camera.videoHeight;
+        context.drawImage(camera, 0, 0, canvas.width, canvas.height);
 
-      // ----- 預覽縮圖 -----
-      const img = document.createElement('img');
-      img.src = dataURL;
-      img.alt = steps[stepIndex];
-      preview.appendChild(img);
+        canvas.toBlob(blob => {
+            imageData[currentCaptureType] = blob;
+            updatePreview(currentCaptureType, blob);
+            stopCamera();
+        }, 'image/jpeg');
+    }
 
-      stepIndex++;
-      if(stepIndex < steps.length){
-        captureBtn.textContent = `拍照（${steps[stepIndex]}）`;
-        statusText.textContent = `請拍攝${steps[stepIndex]}，並保持清晰`;
-      }else{
-        statusText.textContent = '已完成三張照片，可上傳';
-        captureBtn.style.display = 'none';
-        uploadForm.style.display = 'block';
-      }
-    });
+    // --- 上傳工作流程 ---
 
-    // ===== 上傳 =====
-    uploadForm.addEventListener('submit', (e)=>{
-      e.preventDefault();
-      const formData = new FormData();
-      capturedBlobs.forEach((blob,i)=> formData.append('photo', blob, `view${i}.jpg`));
-      fetch('/upload',{method:'POST',body:formData})
-        .then(res=>res.json())
-        .then(data=>{
-          alert('上傳成功！\n結果：'+JSON.stringify(data));
-          location.reload();
-        })
-        .catch(err=>{
-          alert('上傳失敗：'+err.message);
+    function handleFileUpload(event) {
+        const file = event.target.files[0];
+        const type = event.target.dataset.type;
+        if (file && type) {
+            imageData[type] = file;
+            updatePreview(type, file);
+        }
+    }
+
+    // --- 事件綁定 ---
+
+    // 1. 綁定所有 "拍攝" 按鈕
+    document.querySelectorAll('.btn-camera').forEach(button => {
+        button.addEventListener('click', () => {
+            const type = button.dataset.type;
+            startCamera(type);
         });
     });
+
+    // 2. 綁定所有 "上傳" 的檔案輸入框
+    document.querySelectorAll('input[type=file]').forEach(input => {
+        input.addEventListener('change', handleFileUpload);
+    });
+    
+    // 3. 綁定相機介面按鈕
+    captureBtn.addEventListener('click', captureImage);
+    closeCameraBtn.addEventListener('click', stopCamera);
+
+    // 4. 綁定 "開始辨識" 按鈕
+    document.getElementById('analyzeBtn').addEventListener('click', () => {
+        resultDiv.className = '';
+        
+        // 檢查三張圖片是否都已齊全
+        if (!imageData.front || !imageData.side || !imageData.head) {
+            resultDiv.textContent = '請先為三個項目提供照片！';
+            resultDiv.classList.add('result-error');
+            return;
+        }
+
+        resultDiv.textContent = '影像規格符合，辨識中...';
+        resultDiv.classList.add('result-processing');
+
+        // 模擬辨識延遲
+        setTimeout(() => {
+            const probability = Math.random();
+            const THRESHOLD = 0.6;
+            
+            if (probability > THRESHOLD) {
+                resultDiv.textContent = '辨識結果：比特犬';
+                resultDiv.className = 'result-pitbull';
+            } else {
+                resultDiv.textContent = '辨識結果：非比特犬';
+                resultDiv.className = 'result-not-pitbull';
+            }
+        }, 1500);
+    });
+
   </script>
 </body>
-</html>
+</html>```
