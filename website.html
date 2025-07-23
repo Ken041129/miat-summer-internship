@@ -2,105 +2,217 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>強化動物保護觀念紮根計畫</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>犬隻三視圖上傳工具</title>
+  <!-- PWA basic setup -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#4db6ac">
+  <!-- 字體 -->
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
   <style>
-    /* --- 整體佈景 --- */
+    /* ===== 版面樣式 ===== */
     body{
-      font-family: "Noto Sans TC", sans-serif;
-      background: linear-gradient(135deg,#f6d365 0%,#fda085 100%);
-      min-height:100vh;
+      font-family:"Noto Sans TC",sans-serif;
+      background:linear-gradient(135deg,#f6d365 0%,#fda085 100%);
       margin:0;
+      min-height:100vh;
       display:flex;
       align-items:center;
       justify-content:center;
+      color:#333;
     }
-    /* --- 卡片 --- */
-    .container{
-      background:rgba(255,255,255,.9);
+    .card{
+      background:rgba(255,255,255,.95);
       border-radius:16px;
-      padding:2rem;
-      box-shadow:0 4px 10px rgba(0,0,0,.1);
-      max-width:500px;
-      text-align:center;
+      padding:1.5rem;
+      width:100%;
+      max-width:560px;
+      box-shadow:0 6px 15px rgba(0,0,0,.15);
     }
-    h1{margin-top:0;color:#333}
-    /* --- 檔案選擇 --- */
-    input[type=file]{display:none;}
-    .file-btn{
+    h1{margin:0 0 .5rem;font-size:1.4rem;}
+    .label{font-size:.95rem;color:#555;margin-bottom:.5rem;}
+
+    /* 相機畫面 */
+    #cameraContainer{
+      position:relative;
+      width:100%;
+      aspect-ratio:4/3;
+      background:#000;
+      border-radius:12px;
+      overflow:hidden;
+    }
+    #camera{
+      width:100%;
+      height:100%;
+      object-fit:cover;
+    }
+    /* 拍攝導引框 */
+    #guide{
+      position:absolute;
+      top:50%;
+      left:50%;
+      width:70%;
+      height:70%;
+      transform:translate(-50%,-50%);
+      border:4px dashed rgba(255,255,255,.8);
+      border-radius:12px;
+      pointer-events:none;
+    }
+
+    /* 按鈕 */
+    .btn{
       display:inline-block;
-      padding:.75rem 1.5rem;
-      border-radius:9999px;
-      background:#ff8a65;
-      color:#fff;
-      cursor:pointer;
-      font-size:1rem;
-      transition:background .3s;
-    }
-    .file-btn:hover{background:#ff7043;}
-    /* --- 送出按鈕 --- */
-    button[type=submit]{
+      padding:.6rem 1.2rem;
       margin-top:1rem;
-      padding:.75rem 1.5rem;
       border:none;
       border-radius:9999px;
-      background:#4db6ac;
-      color:#fff;
       font-size:1rem;
       cursor:pointer;
       transition:background .3s;
+      color:#fff;
     }
-    button[type=submit]:hover{background:#00897b;}
-    /* --- 縮圖預覽 --- */
+    .btn.capture{background:#ff8a65;}
+    .btn.capture:hover{background:#ff7043;}
+    .btn.submit{background:#4db6ac;}
+    .btn.submit:hover{background:#00897b;}
+
+    /* 縮圖預覽 */
     .preview{
       margin-top:1rem;
       display:flex;
-      flex-wrap:wrap;
       gap:.5rem;
+      flex-wrap:wrap;
       justify-content:center;
     }
     .preview img{
-      width:120px;
-      height:120px;
+      width:100px;
+      height:100px;
       object-fit:cover;
       border-radius:12px;
       box-shadow:0 2px 6px rgba(0,0,0,.1);
     }
-    .footer{font-size:.85rem;margin-top:1rem;}
+    #status{font-size:1rem;margin-top:.5rem;}
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>上傳可愛動物照片</h1>
-    <p>透過分享照片，一起推廣動物保護！</p>
+  <div class="card">
+    <h1>犬隻三視圖拍攝／上傳</h1>
+    <p class="label">步驟：正面 → 側面 → 頭部特寫</p>
 
-    <form action="/upload" method="POST" enctype="multipart/form-data">
-      <label for="photo" class="file-btn">選擇照片</label>
-      <input type="file" id="photo" name="photo" accept="image/*" multiple>
-      <div id="preview" class="preview"></div>
-      <button type="submit">上傳</button>
+    <!-- 相機區 -->
+    <div id="cameraContainer">
+      <video id="camera" autoplay muted playsinline></video>
+      <div id="guide"></div>
+    </div>
+
+    <button id="captureBtn" class="btn capture">拍照（正面）</button>
+    <p id="status">請將犬隻頭部置於框內並保持清晰</p>
+
+    <!-- 縮圖預覽 -->
+    <div class="preview" id="preview"></div>
+
+    <!-- 隱藏的表單，完成三張照片後顯示 -->
+    <form id="uploadForm" action="/upload" method="POST" enctype="multipart/form-data" style="display:none">
+      <input type="hidden" name="mode" value="multiview">
+      <button type="submit" class="btn submit">上傳</button>
     </form>
-
-    <p class="footer">👆 點「選擇照片」後可一次挑多張，確認預覽沒問題就按「上傳」！</p>
   </div>
 
   <script>
-    const input   = document.getElementById('photo');
+    // ===== 相機啟動 =====
+    const camera = document.getElementById('camera');
+    const captureBtn = document.getElementById('captureBtn');
     const preview = document.getElementById('preview');
+    const statusText = document.getElementById('status');
+    const uploadForm = document.getElementById('uploadForm');
 
-    // 立即產生縮圖
-    input.addEventListener('change', () => {
-      preview.innerHTML = '';                       // 清空上一輪
-      [...input.files].forEach(file => {
-        if(!file.type.startsWith('image/')) return; // 只處理圖片
-        const reader = new FileReader();
-        reader.onload = e => {
-          const img = document.createElement('img');
-          img.src = e.target.result;
-          preview.appendChild(img);
-        };
-        reader.readAsDataURL(file);                 // 轉 Base64 結果給 <img>
-      });
+    const steps = ['正面','側面','頭部特寫'];
+    let stepIndex = 0;
+    const capturedBlobs = [];
+
+    async function startCamera(){
+      try{
+        const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+        camera.srcObject = stream;
+      }catch(e){
+        alert('無法存取相機：'+e.message);
+      }
+    }
+    startCamera();
+
+    // ===== 工具函式 =====
+    function dataURLtoBlob(dataurl){
+      const arr = dataurl.split(','), mime = arr[0].match(/:(.*?);/)[1],
+            bstr = atob(arr[1]), n = bstr.length, u8arr = new Uint8Array(n);
+      while(n--){u8arr[n] = bstr.charCodeAt(n);}  // 轉 Uint8Array
+      return new Blob([u8arr], {type:mime});
+    }
+
+    function evaluateQuality(canvas){
+      // ==== 簡化的品質檢查：解析度 & 亮度 ====
+      const ctx = canvas.getContext('2d');
+      const {width,height} = canvas;
+      if(width < 300 || height < 300) return '解析度過低';
+      // 亮度平均值
+      const imgData = ctx.getImageData(0,0,width,height);
+      let sum = 0;
+      for(let i=0;i<imgData.data.length;i+=4){
+        sum += imgData.data[i] + imgData.data[i+1] + imgData.data[i+2];
+      }
+      const brightness = sum / (width*height*3);
+      if(brightness < 40) return '過暗';
+      if(brightness > 220) return '過亮';
+      return 'ok';
+    }
+
+    // ===== 拍照流程 =====
+    captureBtn.addEventListener('click', ()=>{
+      const canvas = document.createElement('canvas');
+      canvas.width = camera.videoWidth;
+      canvas.height = camera.videoHeight;
+      canvas.getContext('2d').drawImage(camera,0,0);
+
+      const quality = evaluateQuality(canvas);
+      if(quality !== 'ok'){
+        alert('品質檢測未通過：'+quality+'\n請重新拍攝');
+        return;
+      }
+
+      const dataURL = canvas.toDataURL('image/jpeg',0.9);
+      const blob = dataURLtoBlob(dataURL);
+      capturedBlobs.push(blob);
+
+      // ----- 預覽縮圖 -----
+      const img = document.createElement('img');
+      img.src = dataURL;
+      img.alt = steps[stepIndex];
+      preview.appendChild(img);
+
+      stepIndex++;
+      if(stepIndex < steps.length){
+        captureBtn.textContent = `拍照（${steps[stepIndex]}）`;
+        statusText.textContent = `請拍攝${steps[stepIndex]}，並保持清晰`;
+      }else{
+        statusText.textContent = '已完成三張照片，可上傳';
+        captureBtn.style.display = 'none';
+        uploadForm.style.display = 'block';
+      }
+    });
+
+    // ===== 上傳 =====
+    uploadForm.addEventListener('submit', (e)=>{
+      e.preventDefault();
+      const formData = new FormData();
+      capturedBlobs.forEach((blob,i)=> formData.append('photo', blob, `view${i}.jpg`));
+      fetch('/upload',{method:'POST',body:formData})
+        .then(res=>res.json())
+        .then(data=>{
+          alert('上傳成功！\n結果：'+JSON.stringify(data));
+          location.reload();
+        })
+        .catch(err=>{
+          alert('上傳失敗：'+err.message);
+        });
     });
   </script>
 </body>
