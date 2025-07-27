@@ -53,9 +53,9 @@
     /* --- 按鈕組 --- */
     .button-group { display: flex; gap: 0.5rem; margin-top: 1rem; }
     .btn { padding: .6rem 1.2rem; border: none; border-radius: 9999px; color: #fff; cursor: pointer; font-size: 0.9rem; transition: background .3s; }
-    .btn-camera { background: #64b5f6; } /* 藍色 */
+    .btn-camera { background: #64b5f6; } 
     .btn-camera:hover { background: #42a5f5; }
-    .btn-upload { background: #ff8a65; } /* 橘色 */
+    .btn-upload { background: #ff8a65; } 
     .btn-upload:hover { background: #ff7043; }
 
     /* --- 檔案選擇 (隱藏) --- */
@@ -96,6 +96,7 @@
     .result-processing { background-color: #e3f2fd; color: #1565c0; }
     .result-pitbull { background-color: #c8e6c9; color: #2e7d32; }
     .result-not-pitbull { background-color: #ffcdd2; color: #c62828; } 
+    .result-uncertain { background-color: #fffde7; color: #f9a825; }
 
     /* --- 相機畫面 --- */
     #camera-view { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: black; z-index: 1000; }
@@ -290,19 +291,56 @@
 
         // 模擬辨識延遲
         setTimeout(() => {
-            const probability = Math.random();
-            const THRESHOLD = 0.6;
-            
-            if (probability > THRESHOLD) {
-                resultDiv.textContent = '辨識結果：比特犬';
-                resultDiv.className = 'result-pitbull';
-            } else {
-                resultDiv.textContent = '辨識結果：非比特犬';
-                resultDiv.className = 'result-not-pitbull';
-            }
-        }, 1500);
-    });
+          const HIGH_CONFIDENCE_THRESHOLD = 0.8;
+          const LOW_CONFIDENCE_THRESHOLD = 0.3;
+
+          const failedImages = [];
+          const confidenceScores = {
+              front: Math.random(),
+              side: Math.random(),
+              head: Math.random()
+          };
+
+          for (const type in confidenceScores) {
+              const score = confidenceScores[type];
+              if (score < HIGH_CONFIDENCE_THRESHOLD) {
+                  failedImages.push({
+                      type,
+                      score
+                  });
+              }
+          }
+
+          if (failedImages.length === 0) {
+              // 全部符合
+              resultDiv.textContent = `辨識結果：比特犬\n信心度：\n正面照 ${Math.round(confidenceScores.front * 100)}%，側面照 ${Math.round(confidenceScores.side * 100)}%，頭部特寫 ${Math.round(confidenceScores.head * 100)}%`;
+              resultDiv.className = 'result-pitbull';
+          } else {
+              // 有未通過的圖
+              const failedMsgs = failedImages.map((fail, index) => {
+                  let label = '';
+                  switch (fail.type) {
+                      case 'front': label = '正面照'; break;
+                      case 'side': label = '側面照'; break;
+                      case 'head': label = '頭部特寫'; break;
+                  }
+                  const score = fail.score;
+                  let reason = '';
+                  if (score < LOW_CONFIDENCE_THRESHOLD) {
+                      reason = `非比特犬 (信心度：${Math.round((1 - score) * 100)}%)`;
+                  } else {
+                      reason = `模糊不清或特徵不明 (信心度：${Math.round(score * 100)}%)`;
+                  }
+                  return `${index + 1}. ${label} → ${reason}`;
+              }).join('\n');
+
+              resultDiv.innerHTML = `辨識未通過，請檢查下列圖片：<br>${failedMsgs.replace(/\n/g, '<br>')}`;
+              resultDiv.className = 'result-error';
+          }
+
+      }, 1500);
+  });
 
   </script>
 </body>
-</html>```
+</html>
