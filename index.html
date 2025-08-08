@@ -173,7 +173,6 @@
     }
     #confirm-preview { max-width: 70vw; max-height: 50vh; border: 2px solid white; border-radius: 8px; }
     #confirm-actions { margin-top: 2rem; display: flex; gap: 1rem; }
-    #sharpen-btn { background: #ffa000; }
 
     /* --- 單張照片的品質提示 --- */
     .quality-hint {
@@ -255,7 +254,6 @@
     <p id="confirm-quality-text" style="color:white; margin-top:1rem;"></p>
     <div id="confirm-actions">
       <button id="retake-btn" class="btn btn-camera">重拍</button>
-      <button id="sharpen-btn" class="btn" style="display:none;">一鍵銳化</button>
       <button id="confirm-btn" class="btn btn-upload">使用照片</button>
     </div>
   </div>
@@ -277,7 +275,6 @@
     const confirmPreview = document.getElementById('confirm-preview');
     const confirmBtn = document.getElementById('confirm-btn');
     const retakeBtn = document.getElementById('retake-btn');
-    const sharpenBtn = document.getElementById('sharpen-btn');
     const confirmQualityText = document.getElementById('confirm-quality-text');
 
     const imageData = { front: null, side: null, head: null };
@@ -286,7 +283,7 @@
     let capturedBlob = null;
     let confirmPreviewUrl = null;
     let startingCamera = false;
-    
+
     const guidanceData = {
       front: { text: "請拍攝犬隻的【正面照】" },
       side:  { text: "請拍攝犬隻的【側面照】" },
@@ -294,6 +291,22 @@
     };
 
     const BRIGHT_DARK = 60, BRIGHT_BRIGHT = 190, SHARP_BLUR = 20, SHARP_SOFT = 50;
+
+    /* ========= 新增：影像規格門檻（可調整） ========= */
+    const SPEC = {
+      minWidth: 640,              // 原圖解析度下限（寬）
+      minHeight: 640,             // 原圖解析度下限（高）
+      minSharpness: SHARP_SOFT,   // 清晰度下限（沿用 SHARP_SOFT=50）
+      minBrightness: BRIGHT_DARK, // 亮度下限（60）
+      maxBrightness: BRIGHT_BRIGHT// 亮度上限（190）
+    };
+    /* ========= 新增：品質結果儲存 ========= */
+    const qualityData = { front: null, side: null, head: null };
+
+    /* ========= 新增：欄位中文標籤 ========= */
+    function labelOfType(t) {
+      return t === 'front' ? '正面照' : (t === 'side' ? '側面照' : '頭部特寫');
+    }
 
     // 品質提示元素
     function getQualityHintEl(type) {
@@ -355,29 +368,6 @@
       return sum / (w * h);
     }
 
-    // 銳化
-    function applySharpenFilter(ctx) {
-      const w = ctx.canvas.width, h = ctx.canvas.height;
-      const imgData = ctx.getImageData(0, 0, w, h);
-      const data = imgData.data, outData = new Uint8ClampedArray(data.length);
-      const kernel = [[0,-1,0],[-1,5,-1],[0,-1,0]];
-      outData.set(data);
-      for (let y = 1; y < h - 1; y++) {
-        for (let x = 1; x < w - 1; x++) {
-          for (let c = 0; c < 3; c++) {
-            let sum = 0;
-            for (let ky = -1; ky <= 1; ky++)
-              for (let kx = -1; kx <= 1; kx++)
-                sum += data[((y + ky) * w + (x + kx)) * 4 + c] * kernel[ky + 1][kx + 1];
-            const idx = (y * w + x) * 4 + c;
-            outData[idx] = Math.max(0, Math.min(255, sum));
-          }
-          outData[(y * w + x) * 4 + 3] = 255;
-        }
-      }
-      ctx.putImageData(new ImageData(outData, w, h), 0, 0);
-    }
-
     // 流程輔助
     function isStreamActive(stream) {
       return !!(stream && stream.getTracks && stream.getTracks().some(t => t.readyState === 'live'));
@@ -407,7 +397,7 @@
     async function startCamera(type) {
       if (startingCamera || !type) return;
       startingCamera = true;
-      
+
       // ★ 將類型儲存在確認對話框上，作為最可靠的狀態來源
       confirmDialog.dataset.type = type;
 
@@ -421,7 +411,7 @@
         startingCamera = false;
         return;
       }
-      
+
       // 否則，重新取得相機權限
       if (!('mediaDevices' in navigator && 'getUserMedia' in navigator.mediaDevices)) {
         alert('抱歉，您的瀏覽器不支援相機功能。');
@@ -496,14 +486,13 @@
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       canvas.width = camera.videoWidth;
       canvas.height = camera.videoHeight;
-      
+
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       ctx.drawImage(camera, 0, 0, canvas.width, canvas.height);
 
       const sharpness = calculateSharpness(ctx);
-      sharpenBtn.style.display = 'none';
       const msg = (sharpness < SHARP_BLUR) ? "影像過於模糊，建議重拍。" :
-                  (sharpness < SHARP_SOFT) ? (sharpenBtn.style.display = 'block', "影像略為模糊。") :
+                  (sharpness < SHARP_SOFT) ? "影像略為模糊。" :
                   "影像品質良好。";
       confirmQualityText.textContent = msg;
 
@@ -535,6 +524,7 @@
       previewEl.appendChild(img);
     }
 
+    // 解析圖像品質（含原圖解析度）
     async function evaluateFileQuality(fileOrBlob) {
       const img = new Image();
       const url = URL.createObjectURL(fileOrBlob);
@@ -546,7 +536,12 @@
       ctx.drawImage(img, 0, 0, off.width, off.height);
       const sharp = calculateSharpness(ctx), bright = calculateBrightness(ctx);
       URL.revokeObjectURL(url);
-      return { sharpness: sharp, brightness: bright };
+      return {
+        sharpness: sharp,
+        brightness: bright,
+        width: img.naturalWidth || img.width,
+        height: img.naturalHeight || img.height
+      };
     }
 
     function handleFileUpload(event) {
@@ -555,8 +550,9 @@
       if (file && type) {
         imageData[type] = file;
         updatePreview(type, file);
-        evaluateFileQuality(file).then(({ sharpness, brightness }) => {
+        evaluateFileQuality(file).then(({ sharpness, brightness, width, height }) => {
           setQualityHint(type, sharpness, brightness);
+          qualityData[type] = { sharpness, brightness, width, height }; // ★ 記錄品質
         }).catch(() => {
           const el = getQualityHintEl(type);
           if (el) { el.className = 'quality-hint quality-warn'; el.textContent = '無法評估品質'; }
@@ -591,20 +587,6 @@
     });
     // ========== FIX END ==========
 
-    // 一鍵銳化
-    sharpenBtn.addEventListener('click', (e) => {
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      applySharpenFilter(ctx);
-      canvas.toBlob(blob => {
-        capturedBlob = blob;
-        if (confirmPreviewUrl) URL.revokeObjectURL(confirmPreviewUrl);
-        confirmPreviewUrl = URL.createObjectURL(blob);
-        confirmPreview.src = confirmPreviewUrl;
-      }, 'image/jpeg');
-      e.target.style.display = 'none';
-      confirmQualityText.textContent = "影像已銳化。";
-    });
-
     // ========== FIX START: 「使用照片」按鈕的最終修正 ==========
     confirmBtn.addEventListener('click', async () => {
       if (confirmBtn.disabled) return;
@@ -626,8 +608,9 @@
         updatePreview(type, blob);
 
         try {
-          const { sharpness, brightness } = await evaluateFileQuality(blob);
+          const { sharpness, brightness, width, height } = await evaluateFileQuality(blob);
           setQualityHint(type, sharpness, brightness);
+          qualityData[type] = { sharpness, brightness, width, height }; // ★ 記錄品質
         } catch (e) {
           const el = getQualityHintEl(type);
           if (el) { el.className = 'quality-hint quality-warn'; el.textContent = '無法評估品質'; }
@@ -642,26 +625,91 @@
     });
     // ========== FIX END ==========
 
-    // 模擬辨識
-    document.getElementById('analyzeBtn').addEventListener('click', () => {
-      resultDiv.className = '';
-      if (!imageData.front || !imageData.side || !imageData.head) {
-        resultDiv.textContent = '請先為三個項目提供照片！';
-        resultDiv.classList.add('result-error'); return;
+    /* ========= 新增：單張影像規格檢核 → 回傳不合格原因陣列（空=合格） ========= */
+    function checkAgainstSpec(type) {
+      const q = qualityData[type];
+      const reasons = [];
+      if (!q) {
+        reasons.push('尚未完成品質分析');
+        return reasons;
       }
+      if (q.width < SPEC.minWidth || q.height < SPEC.minHeight) {
+        reasons.push(`解析度過低 (${q.width}×${q.height})，需 ≥ ${SPEC.minWidth}×${SPEC.minHeight}`);
+      }
+      if (q.sharpness < SPEC.minSharpness) {
+        reasons.push(`清晰度不足 (VoL=${q.sharpness.toFixed(1)}，需 ≥ ${SPEC.minSharpness})`);
+      }
+      if (q.brightness < SPEC.minBrightness) {
+        reasons.push(`亮度過暗 (Ȳ=${q.brightness.toFixed(1)}，需 ≥ ${SPEC.minBrightness})`);
+      }
+      if (q.brightness > SPEC.maxBrightness) {
+        reasons.push(`亮度過亮 (Ȳ=${q.brightness.toFixed(1)}，需 ≤ ${SPEC.maxBrightness})`);
+      }
+      return reasons;
+    }
+
+    /* ========= 取代：開始辨識 → 先做硬性門檻，未過直接「無法辨識」 ========= */
+    document.getElementById('analyzeBtn').addEventListener('click', async () => {
+      resultDiv.className = '';
+
+      // (1) 三張是否齊全
+      const required = ['front', 'side', 'head'];
+      const missing = required.filter(t => !imageData[t]);
+      if (missing.length) {
+        resultDiv.textContent = '請先為三個項目提供照片！';
+        resultDiv.classList.add('result-error');
+        return;
+      }
+
+      // (2) 確保三張都有品質資料，若沒有就補算
+      try {
+        const needsEval = required.filter(t => !qualityData[t]);
+        if (needsEval.length) {
+          await Promise.all(needsEval.map(async t => {
+            const q = await evaluateFileQuality(imageData[t]);
+            qualityData[t] = q;
+            setQualityHint(t, q.sharpness, q.brightness);
+          }));
+        }
+      } catch (e) {
+        resultDiv.textContent = '品質分析失敗，請重新上傳或重拍。';
+        resultDiv.classList.add('result-error');
+        return;
+      }
+
+      // (3) 規格檢核（gating）
+      const failed = [];
+      required.forEach(t => {
+        const reasons = checkAgainstSpec(t);
+        if (reasons.length) failed.push({ type: t, reasons });
+      });
+
+      if (failed.length) {
+        const html = [
+          '無法辨識：影像不符規格。請依提示更換或重拍：',
+          ...failed.map((f, i) => `${i + 1}. ${labelOfType(f.type)} → ${f.reasons.join('、')}`)
+        ].join('<br>');
+        resultDiv.innerHTML = html;
+        resultDiv.classList.add('result-error');
+        return; // ★ 不進入辨識
+      }
+
+      // (4) 全數通過才進入（現階段沿用模擬邏輯）
       resultDiv.textContent = '影像規格符合，辨識中...';
       resultDiv.classList.add('result-processing');
+
       setTimeout(() => {
         const HI = 0.8, LO = 0.3;
-        const failed = [];
         const scores = { front: Math.random(), side: Math.random(), head: Math.random() };
-        for (const t in scores) if (scores[t] < HI) failed.push({ type: t, score: scores[t] });
-        if (failed.length === 0) {
+        const failedByScore = [];
+        for (const t in scores) if (scores[t] < HI) failedByScore.push({ type: t, score: scores[t] });
+
+        if (failedByScore.length === 0) {
           resultDiv.innerHTML =
             `辨識結果：比特犬<br>信心度：<br>正面照 ${Math.round(scores.front*100)}%，側面照 ${Math.round(scores.side*100)}%，頭部特寫 ${Math.round(scores.head*100)}%`;
           resultDiv.className = 'result-pitbull';
         } else {
-          const msg = failed.map((f,i)=>{
+          const msg = failedByScore.map((f,i)=>{
             const label = f.type==='front'?'正面照':f.type==='side'?'側面照':'頭部特寫';
             const reason = (f.score<LO)?`判斷為非比特犬 (信心度：${Math.round((1-f.score)*100)}%)`
                                        :`模糊或特徵不明 (信心度：${Math.round(f.score*100)}%)`;
