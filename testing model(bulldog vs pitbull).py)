@@ -1,0 +1,186 @@
+# ==========================================
+# AB vs APBT（Group Split 安全版，群組不足時自動建立「偽群組」）
+# - 若父資料夾群組不足，改用「每類 K-bucket 偽群組」：class + hash(filename)%K
+# - 輸出格式沿用：[INFO] ...、=== 成績 ===、混淆矩陣、ROC AUC、平均延遲
+# ==========================================
+
+from PIL import Image
+import os, glob, re, time, hashlib
+import numpy as np
+import torch, torchvision
+from torchvision import transforms
+from sklearn.model_selection import GroupShuffleSplit
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
+
+# ===== 參數 =====
+BASE_DIR = "/content/my_images"
+BACKBONE_NAME = "efficientnet_b3"    # 可改: efficientnet_b0, efficientnet_b3, mobilenet_v3_large, resnet50, vit_b_16
+TEST_SIZE = 0.3
+RANDOM_SEED = 42
+FALLBACK_K_BUCKETS = 5        # 當每類群組不足時，每類切成 K 個偽群組（5~10 都可）
+# =================
+
+torch.set_grad_enabled(False)
+
+# 1) 讀檔（遞迴 + 大小寫副檔名）
+EXISTS_EXTS = ["jpg","jpeg","png","webp","bmp","JPG","JPEG","PNG","WEBP","BMP"]
+def list_images_recursively(base_dir=BASE_DIR):
+    files_list = []
+    for ext in EXISTS_EXTS:
+        files_list.extend(glob.glob(os.path.join(base_dir, f"**/*.{ext}"), recursive=True))
+    return sorted(files_list)
+
+file_paths = list_images_recursively()
+if len(file_paths) == 0:
+    raise RuntimeError("⚠️ /content/my_images 沒有影像（含子資料夾）。")
+
+# 2) 類別貼標：AB=0, APBT=1
+def is_ab(name):
+    n = name.lower()
+    # 盡量用明確關鍵字；若只寫 bulldog 容易混別種
+    if "american_bulldog" in n or "am_bulldog" in n:
+        return True
+    # 如你確定資料乾淨，也可放寬：
+    if "bulldog" in n and not any(k in n for k in ["french","english","olde","bull_terrier","staffordshire","mastiff","bullmastiff"]):
+        return True
+    return False
+
+def is_apbt(name):
+    n = name.lower()
+    return ("american_pit_bull_terrier" in n) or ("apbt" in n) or ("pitbull" in n) or ("pit_bull" in n)
+
+labels, bad = [], []
+for p in file_paths:
+    b = os.path.basename(p)
+    if is_apbt(b): labels.append(1)
+    elif is_ab(b): labels.append(0)
+    else: bad.append(b)
+
+if bad:
+    print("⚠️ 無法貼標的檔案（請調整檔名後重跑）：")
+    print(bad[:20])
+    raise SystemExit("停止。")
+
+y = np.array(labels)
+n_total = len(y)
+
+# 3) 來源群組：先用「父資料夾」；不足時改用「每類 K-bucket 偽群組」
+def folder_group(path):
+    parent = os.path.basename(os.path.dirname(path))
+    return parent if parent else "root"
+
+folder_groups = np.array([folder_group(p) for p in file_paths])
+
+# 檢查「每個類別內」的群組數
+def count_groups_per_class(groups, labels):
+    g_per_cls = {}
+    for cls in [0,1]:
+        g = set(groups[np.where(labels==cls)[0]])
+        g_per_cls[cls] = len(g)
+    return g_per_cls
+
+gcount = count_groups_per_class(folder_groups, y)
+
+def make_hash(s):  # 穩定 hash 成 0..K-1
+    h = hashlib.sha1(s.encode("utf-8")).hexdigest()
+    return int(h[:8], 16)
+
+use_fallback = (gcount[0] < 2) or (gcount[1] < 2)
+if use_fallback:
+    # 每類做 K 個偽群組：group = f"{class}_{hash(filename)%K}"
+    K = FALLBACK_K_BUCKETS
+    pseudo_groups = []
+    for p, lbl in zip(file_paths, y):
+        stem = os.path.basename(p)
+        bucket = make_hash(stem) % K
+        pseudo_groups.append(f"{lbl}_g{bucket}")
+    groups = np.array(pseudo_groups)
+    mode_desc = f"偽群組模式（每類 {K} 個）"
+else:
+    groups = folder_groups
+    mode_desc = "資料夾群組模式"
+
+# 最終檢查：兩個類別的群組都至少 2 個
+gcount_final = count_groups_per_class(groups, y)
+if gcount_final[0] < 2 or gcount_final[1] < 2:
+    raise RuntimeError(f"⚠️ 群組仍不足：AB有 {gcount_final[0]} 組、APBT有 {gcount_final[1]} 組。請增加來源多樣性或調大 FALLBACK_K_BUCKETS。")
+
+# 4) 載入骨幹 + 前處理
+def load_backbone(name):
+    if name == "efficientnet_b0":
+        m = torchvision.models.efficientnet_b0(weights="IMAGENET1K_V1"); fd = m.classifier[1].in_features; m.classifier = torch.nn.Identity()
+    elif name == "efficientnet_b3":
+        m = torchvision.models.efficientnet_b3(weights="IMAGENET1K_V1"); fd = m.classifier[1].in_features; m.classifier = torch.nn.Identity()
+    elif name == "mobilenet_v3_large":
+        m = torchvision.models.mobilenet_v3_large(weights="IMAGENET1K_V2"); fd = m.classifier[0].in_features if hasattr(m.classifier[0],'in_features') else 960; m.classifier = torch.nn.Identity()
+    elif name == "resnet50":
+        m = torchvision.models.resnet50(weights="IMAGENET1K_V2"); fd = m.fc.in_features; m.fc = torch.nn.Identity()
+    elif name == "vit_b_16":
+        m = torchvision.models.vit_b_16(weights="IMAGENET1K_V1"); fd = m.heads.head.in_features; m.heads.head = torch.nn.Identity()
+    else:
+        raise ValueError(name)
+    pre = transforms.Compose([
+        transforms.Resize(256), transforms.CenterCrop(224),
+        transforms.ToTensor(), transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225]),
+    ])
+    m.eval()
+    return m, pre, fd
+
+backbone, preprocess, feat_dim = load_backbone(BACKBONE_NAME)
+
+# 5) 抽特徵 + 延遲
+X, latencies = [], []
+for p in file_paths:
+    img = Image.open(p).convert("RGB")
+    t0 = time.time()
+    with torch.no_grad():
+        v = preprocess(img).unsqueeze(0)
+        f = backbone(v).squeeze(0).cpu().numpy()
+    latencies.append((time.time()-t0)*1000.0)
+    X.append(f)
+X = np.stack(X)
+avg_ms = float(np.mean(latencies))
+
+# 6) GroupShuffleSplit（重試直到兩側皆含兩類）
+def split_with_retry(X, y, groups, test_size=TEST_SIZE, seed=RANDOM_SEED, max_tries=1000):
+    tries = 0
+    for rs in range(seed, seed+max_tries):
+        gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=rs)
+        tr_idx, te_idx = next(gss.split(X, y, groups=groups))
+        if len(np.unique(y[tr_idx])) >= 2 and len(np.unique(y[te_idx])) >= 2:
+            return tr_idx, te_idx, rs
+        tries += 1
+    raise RuntimeError("⚠️ 仍無法切出兩側皆含兩類；請檢查資料或調整偽群組 K。")
+
+tr_idx, te_idx, used_seed = split_with_retry(X, y, groups, TEST_SIZE, RANDOM_SEED)
+
+X_tr, X_te, y_tr, y_te = X[tr_idx], X[te_idx], y[tr_idx], y[te_idx]
+
+# 7) 訓練 + 舊版輸出樣式
+clf = make_pipeline(
+    StandardScaler(with_mean=True, with_std=True),
+    LogisticRegression(max_iter=1000, class_weight="balanced", solver="lbfgs")
+)
+clf.fit(X_tr, y_tr)
+y_pred = clf.predict(X_te)
+
+print(f"[INFO] 總影像數: {n_total}, 特徵維度: {X.shape[1]}, 平均單張延遲: {avg_ms:.1f} ms")
+print(f"[INFO] 群組模式: {mode_desc}（AB群組={gcount_final[0]}，APBT群組={gcount_final[1]}，seed={used_seed}）")
+
+print("\n=== 嚴謹切分成績（AB=0, APBT=1）===")
+print(classification_report(y_te, y_pred, digits=4))
+
+print("混淆矩陣：")
+print(confusion_matrix(y_te, y_pred))
+
+try:
+    y_prob = clf.predict_proba(X_te)[:,1]
+    auc = roc_auc_score(y_te, y_prob)
+    print(f"\nROC AUC: {auc:.4f}")
+except Exception as e:
+    print("\nROC AUC: 無法計算：", e)
+
+print(f"\n平均骨幹推論延遲（ms/張）: {avg_ms:.1f}")
