@@ -1,0 +1,463 @@
+from PIL import Image
+import os, glob, time, hashlib, shutil, random
+import numpy as np
+import torch, torchvision
+from torchvision import transforms
+from sklearn.model_selection import GroupShuffleSplit
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import (
+    classification_report, confusion_matrix, roc_auc_score, log_loss,
+    precision_recall_curve
+)
+from joblib import dump, load
+from collections import defaultdict
+
+# ========== 可調參數 ==========
+SRC_DIR = "/content/my_images"     # 原始資料夾（可含子資料夾）
+TEST_SIZE = 0.3
+RANDOM_SEED = 42
+K_GROUPS_PER_CLASS = 5
+EXISTS_EXTS = ["jpg","jpeg","png","webp","bmp","JPG","JPEG","PNG","WEBP","BMP"]
+
+IMG_SIZE = 300
+
+# 訓練線性頭參數（穩定設定）
+EPOCHS = 100
+BATCH_SIZE = 64
+LR = 3e-3
+WEIGHT_DECAY = 1e-4
+PRINT_EVERY = 10
+USE_EARLY_STOP = True
+PATIENCE = 10
+MAX_NORM = 1.0  # 梯度裁剪，0/None 表示關閉
+
+# 門檻（在 Val 上達到的 precision 下限）
+TARGET_PRECISION = 0.90
+VAL_FRAC = 0.10  # 內層從 Train 再切 10% 作 Val
+
+# 檔案路徑（存在 /content）
+CKPT_BEST_PATH      = "/content/linear_head.pth"               # 只有變好才覆蓋
+CKPT_LAST_PATH      = "/content/linear_head_last.pth"          # 每次都更新
+SCALER_BEST_PATH    = "/content/feature_scaler.joblib"         # 只有變好才覆蓋
+SCALER_LAST_PATH    = "/content/feature_scaler_last.joblib"    # 每次都更新
+THRESHOLD_BEST_PATH = "/content/decision_threshold.txt"        # 只有變好才覆蓋
+THRESHOLD_LAST_PATH = "/content/decision_threshold_last.txt"   # 每次都更新
+BEST_META_PATH      = "/content/best_meta.txt"                 # 紀錄歷來最佳的 val_loss
+
+# ========== 隨機種子 ==========
+random.seed(RANDOM_SEED)
+np.random.seed(RANDOM_SEED)
+torch.manual_seed(RANDOM_SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(RANDOM_SEED)
+
+# ========== 小工具 ==========
+def list_images_recursively(base_dir):
+    files_list = []
+    for ext in EXISTS_EXTS:
+        files_list.extend(glob.glob(os.path.join(base_dir, f"**/*.{ext}"), recursive=True))
+    return sorted(files_list)
+
+def is_apbt_by_name(name_lower: str) -> bool:
+    return "american_pit_bull_terrier" in name_lower
+
+def label_binary_apbt(path):
+    n = os.path.basename(path).lower()
+    return 1 if is_apbt_by_name(n) else 0   # APBT=1，非APBT=0
+
+def folder_group(path):
+    parent = os.path.basename(os.path.dirname(path))
+    return parent if parent else "root"
+
+def count_groups_per_class(paths, labels):
+    groups = np.array([folder_group(p) for p in paths])
+    g0 = set(groups[np.where(labels==0)[0]])
+    g1 = set(groups[np.where(labels==1)[0]])
+    return len(g0), len(g1)
+
+def hash_bucket(stem, k):
+    h = hashlib.sha1(stem.encode("utf-8")).hexdigest()
+    return int(h[:8], 16) % k
+
+def ensure_grouped_folder(src_dir, k_groups=K_GROUPS_PER_CLASS):
+    paths = list_images_recursively(src_dir)
+    if len(paths) == 0:
+        raise RuntimeError(f"⚠️ 在 {src_dir} 找不到影像")
+    y = np.array([label_binary_apbt(p) for p in paths])
+    non_groups, apbt_groups = count_groups_per_class(paths, y)
+    if non_groups >= 2 and apbt_groups >= 2:
+        return src_dir, "資料夾群組模式（原樣）"
+    dst_dir = f"{src_dir.rstrip('/')}_grouped_k{k_groups}"
+    os.makedirs(dst_dir, exist_ok=True)
+    for g in range(k_groups):
+        os.makedirs(os.path.join(dst_dir, f"nonapbt_g{g}"), exist_ok=True)
+        os.makedirs(os.path.join(dst_dir, f"apbt_g{g}"), exist_ok=True)
+    for p, lbl in zip(paths, y):
+        base = os.path.basename(p)
+        g = hash_bucket(base, k_groups)
+        sub = f"apbt_g{g}" if lbl==1 else f"nonapbt_g{g}"
+        shutil.copy2(p, os.path.join(dst_dir, sub, base))
+    return dst_dir, f"資料夾群組模式（自動重組，K={k_groups}）"
+
+def load_b3():
+    try:
+        from torchvision.models import EfficientNet_B3_Weights
+        m = torchvision.models.efficientnet_b3(weights=EfficientNet_B3_Weights.IMAGENET1K_V1)
+    except Exception:
+        m = torchvision.models.efficientnet_b3(weights="IMAGENET1K_V1")
+    m.classifier = torch.nn.Identity()
+    pre = transforms.Compose([
+        transforms.Resize(IMG_SIZE + 32),
+        transforms.CenterCrop(IMG_SIZE),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225]),
+    ])
+    m.eval()
+    return m, pre
+
+def split_with_retry_indices(X, y, groups, test_size, seed, max_tries=500):
+    """GroupShuffleSplit，重試直到兩邊都有 0/1 兩類"""
+    for rs in range(seed, seed + max_tries):
+        gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=rs)
+        a_idx, b_idx = next(gss.split(X, y, groups=groups))
+        if len(np.unique(y[a_idx])) >= 2 and len(np.unique(y[b_idx])) >= 2:
+            return a_idx, b_idx, rs
+    raise RuntimeError("⚠️ 無法切出兩側都有兩類，請檢查資料或提高 K_GROUPS_PER_CLASS/調整 seed")
+
+def robust_group_subsplit(X, y, groups, val_frac, seed):
+    """
+    內層切分：先嘗試 GroupShuffleSplit；若失敗則 fallback：
+    - 以群組為單位挑 Val，確保同時含 0/1 且接近 val_frac。
+    回傳：subtrain_idx, val_idx, used_seed, used_fallback(bool)
+    """
+    n = len(y)
+    # 1) 嘗試一般 group split
+    try:
+        sub_idx, val_idx, used_seed = split_with_retry_indices(
+            X, y, groups, test_size=val_frac, seed=seed, max_tries=200
+        )
+        return sub_idx, val_idx, used_seed, False
+    except RuntimeError:
+        pass
+
+    # 2) fallback：手動以群組挑 Val
+    rng = np.random.default_rng(seed)
+    uniq_groups = np.array(sorted(set(groups)))
+    rng.shuffle(uniq_groups)
+
+    from collections import defaultdict
+    group_to_idx = defaultdict(list)
+    for i, g in enumerate(groups):
+        group_to_idx[g].append(i)
+
+    group_pos = {g: int(np.sum(y[group_to_idx[g]])) for g in uniq_groups}
+    group_neg = {g: int(np.sum(y[group_to_idx[g]] == 0)) for g in uniq_groups}
+
+    target_val = max(1, int(round(val_frac * n)))
+    chosen, total = [], 0
+    pos_in, neg_in = 0, 0
+
+    pos_groups = [g for g in uniq_groups if group_pos[g] > 0]
+    neg_groups = [g for g in uniq_groups if group_neg[g] > 0]
+    rng.shuffle(pos_groups); rng.shuffle(neg_groups)
+    if len(pos_groups) == 0 or len(neg_groups) == 0:
+        # 極端保底
+        mid = n // 10 if n >= 10 else max(1, n // 5)
+        val_idx = np.arange(0, mid, dtype=int)
+        sub_idx = np.arange(mid, n, dtype=int)
+        return sub_idx, val_idx, seed, True
+
+    # 先各挑一個群組，確保兩類都有
+    g1 = pos_groups[0]; g2 = neg_groups[0] if neg_groups[0] != g1 else (neg_groups[1] if len(neg_groups) > 1 else neg_groups[0])
+    for g in [g1, g2]:
+        if g not in chosen:
+            chosen.append(g)
+            total += len(group_to_idx[g])
+            pos_in += group_pos[g]; neg_in += group_neg[g]
+
+    # 貪婪補群組至接近 target_val
+    remain = [g for g in uniq_groups if g not in chosen]
+    def score(g):
+        add_pos = group_pos[g]; add_neg = group_neg[g]
+        need_pos = 1 if pos_in == 0 else 0
+        need_neg = 1 if neg_in == 0 else 0
+        balance_gain = (need_pos and add_pos > 0) + (need_neg and add_neg > 0)
+        size_penalty = abs((total + len(group_to_idx[g])) - target_val)
+        return (balance_gain, -size_penalty)
+    while total < target_val and len(remain) > 0:
+        remain.sort(key=score, reverse=True)
+        g = remain.pop(0)
+        chosen.append(g)
+        total += len(group_to_idx[g])
+        pos_in += group_pos[g]; neg_in += group_neg[g]
+
+    # 若仍缺某類，硬補一個含該類的群組
+    if pos_in == 0:
+        cand = [g for g in remain if group_pos[g] > 0]
+        if cand:
+            g = cand[0]; chosen.append(g); total += len(group_to_idx[g]); pos_in += group_pos[g]; neg_in += group_neg[g]
+    if neg_in == 0:
+        cand = [g for g in remain if group_neg[g] > 0]
+        if cand:
+            g = cand[0]; chosen.append(g); total += len(group_to_idx[g]); pos_in += group_pos[g]; neg_in += group_neg[g]
+
+    # 轉成索引
+    val_idx_list = []
+    for g in chosen:
+        val_idx_list.extend(group_to_idx[g])
+    val_idx = np.array(sorted(val_idx_list), dtype=int)
+    sub_idx = np.array(sorted(set(range(n)) - set(val_idx)), dtype=int)
+    return sub_idx, val_idx, seed, True
+
+def pick_threshold_on_val(probs_val, y_val, min_precision=0.90):
+    """用 precision_recall_curve 在 Val 上挑門檻；若 Val 單一類，回傳 None"""
+    if len(np.unique(y_val)) < 2:
+        return None
+    precision, recall, thresholds = precision_recall_curve(y_val, probs_val)
+    prec_t = precision[:-1]; rec_t = recall[:-1]; thr_t = thresholds
+    mask = prec_t >= min_precision
+    if np.any(mask):
+        f1 = 2 * (prec_t[mask] * rec_t[mask]) / (prec_t[mask] + rec_t[mask] + 1e-12)
+        best_i = np.argmax(f1)
+        return float(thr_t[mask][best_i])
+    f1_all = 2 * (prec_t * rec_t) / (prec_t + rec_t + 1e-12)
+    best_i = np.argmax(f1_all)
+    return float(thr_t[best_i])
+
+# ========== 主流程 ==========
+# A) 準備資料夾
+BASE_DIR, group_mode_desc = ensure_grouped_folder(SRC_DIR)
+
+# B) 準備檔案/標籤/群組
+file_paths = list_images_recursively(BASE_DIR)
+if len(file_paths) == 0:
+    raise RuntimeError(f"⚠️ 在 {BASE_DIR} 找不到影像")
+y_all = np.array([label_binary_apbt(p) for p in file_paths], dtype=np.int64)
+if len(np.unique(y_all)) < 2:
+    raise RuntimeError("⚠️ 目前資料只有單一類別，請補齊兩類影像")
+groups_all = np.array([folder_group(p) for p in file_paths])
+
+# C) 抽特徵（凍結骨幹）
+backbone, preprocess = load_b3()
+X_all, latencies = [], []
+for p in file_paths:
+    img = Image.open(p).convert("RGB")
+    t0 = time.time()
+    with torch.no_grad():
+        v = preprocess(img).unsqueeze(0)
+        f = backbone(v).squeeze(0).cpu().numpy()
+    latencies.append((time.time()-t0)*1000.0)
+    X_all.append(f)
+X_all = np.stack(X_all)
+avg_ms = float(np.mean(latencies))
+feat_dim = X_all.shape[1]
+
+# D) 最外層 Group Split：Train/Test（確保兩邊都有 0/1）
+train_idx, test_idx, used_seed_outer = split_with_retry_indices(
+    X_all, y_all, groups_all, test_size=TEST_SIZE, seed=RANDOM_SEED, max_tries=500
+)
+X_tr0, X_te = X_all[train_idx], X_all[test_idx]
+y_tr0, y_te = y_all[train_idx], y_all[test_idx]
+groups_tr0 = groups_all[train_idx]
+
+# E) 標準化（用 Train fit）
+scaler = StandardScaler(with_mean=True, with_std=True)
+X_tr0 = scaler.fit_transform(X_tr0)
+X_te  = scaler.transform(X_te)
+
+# 同步存 "last" 版 scaler（每次更新）
+try:
+    dump(scaler, SCALER_LAST_PATH)
+    print(f"[INFO] 已儲存 StandardScaler(Last) 到：{SCALER_LAST_PATH}")
+except Exception as e:
+    print(f"[WARN] 無法儲存 scaler 到 {SCALER_LAST_PATH}: {e}")
+
+# F) Train 內層再切 Subtrain/Val（穩健：先嘗試 GSS，失敗則 fallback）
+subtr_rel, val_rel, used_seed_inner, used_fallback = robust_group_subsplit(
+    X_tr0, y_tr0, groups_tr0, val_frac=VAL_FRAC, seed=RANDOM_SEED+7
+)
+X_subtr, X_val = X_tr0[subtr_rel], X_tr0[val_rel]
+y_subtr, y_val = y_tr0[subtr_rel], y_tr0[val_rel]
+
+# G) Tensor 與 DataLoader（僅用 Subtrain 訓練）
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.set_grad_enabled(True)
+X_subtr_t = torch.from_numpy(X_subtr).float().to(device)
+y_subtr_t = torch.from_numpy(y_subtr).float().unsqueeze(1).to(device)
+X_val_t   = torch.from_numpy(X_val).float().to(device)
+y_val_t   = torch.from_numpy(y_val).float().unsqueeze(1).to(device)
+X_te_t    = torch.from_numpy(X_te).float().to(device)
+y_te_t    = torch.from_numpy(y_te).float().unsqueeze(1).to(device)
+
+train_ds = torch.utils.data.TensorDataset(X_subtr_t, y_subtr_t)
+train_loader = torch.utils.data.DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, drop_last=False)
+
+# H) 線性頭
+model = torch.nn.Linear(feat_dim, 1).to(device)
+
+# 嘗試載入「最佳」模型作為初始化（若尺寸相容）
+if os.path.exists(CKPT_BEST_PATH):
+    try:
+        state = torch.load(CKPT_BEST_PATH, map_location=device)
+        w = state.get('weight', None); b = state.get('bias', None)
+        ok = True
+        if w is not None and tuple(w.shape) != tuple(model.weight.data.shape): ok = False
+        if b is not None and tuple(b.shape) != tuple(model.bias.data.shape):   ok = False
+        if ok:
+            model.load_state_dict(state)
+            print(f"[INFO] 已載入舊模型權重（best）：{CKPT_BEST_PATH}")
+        else:
+            print(f"[WARN] 舊模型權重維度不相容，將從隨機初始化")
+    except Exception as e:
+        print(f"[WARN] 無法載入舊模型（將隨機初始化）：{e}")
+
+# 不平衡處理（用 Subtrain 比例計算）
+pos_count = float(y_subtr.sum())
+neg_count = float(len(y_subtr) - pos_count)
+pos_weight = (neg_count / max(pos_count, 1.0))
+criterion = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight], device=device))
+optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+
+def eval_loss(model, X, y):
+    model.eval()
+    with torch.no_grad():
+        logits = model(X); loss = criterion(logits, y)
+    return loss.item()
+
+print(f"[INFO] 影像數: {len(y_all)}, 特徵維度: {feat_dim}, 平均單張延遲: {avg_ms:.1f} ms")
+print(f"[INFO] 使用骨幹: efficientnet_b3, 群組模式: {group_mode_desc}, seed={RANDOM_SEED}")
+print(f"[INFO] Subtrain APBT 佔比: {100.0*pos_count/len(y_subtr):.2f}% (pos_weight={pos_weight:.3f})")
+print(f"[INFO] 內層切分：used_fallback={used_fallback}")
+print(f"[INFO] Device: {device}, is_grad_enabled: {torch.is_grad_enabled()}")
+
+# I) 訓練（Subtrain），以 Val 監控 early-stopping
+best_state = None
+best_val = float("inf")
+bad_epochs = 0
+
+for epoch in range(1, EPOCHS+1):
+    model.train()
+    epoch_loss = 0.0
+    for xb, yb in train_loader:
+        optimizer.zero_grad()
+        logits = model(xb)
+        loss = criterion(logits, yb)
+        loss.backward()
+        if MAX_NORM and MAX_NORM > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), MAX_NORM)
+        optimizer.step()
+        epoch_loss += loss.item() * xb.size(0)
+
+    epoch_loss /= len(train_loader.dataset)
+    val_loss = eval_loss(model, X_val_t, y_val_t)
+
+    improved = val_loss < best_val - 1e-6
+    if improved:
+        best_val = val_loss
+        best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+        bad_epochs = 0
+    else:
+        bad_epochs += 1
+
+    if epoch % PRINT_EVERY == 0 or epoch == 1 or epoch == EPOCHS:
+        print(f"epoch {epoch:3d} | subtrain_loss={epoch_loss:.5f} | val_loss={val_loss:.5f}")
+
+    if USE_EARLY_STOP and bad_epochs >= PATIENCE:
+        print(f"[INFO] Early stop at epoch {epoch} (val no improve for {PATIENCE} epochs)")
+        break
+
+# 還原 Val 最佳權重
+if best_state is not None:
+    model.load_state_dict(best_state)
+
+# J) 在 Val（含 0/1）選門檻（若極端單一類，回退 0.5）
+with torch.no_grad():
+    logits_val = model(X_val_t).squeeze(1).cpu().numpy()
+probs_val = 1.0 / (1.0 + np.exp(-logits_val))
+thr = pick_threshold_on_val(probs_val, y_val, min_precision=TARGET_PRECISION)
+if thr is None:
+    thr = 0.5
+print(f"[VAL選門檻] t={thr:.3f}")
+
+# K) 「只在更好時才覆蓋」最佳檔；同時永遠更新 last 檔
+# 先儲存 last（本輪結果）
+try:
+    torch.save(model.state_dict(), CKPT_LAST_PATH)
+    print(f"[INFO] 已儲存模型權重(Last)到：{CKPT_LAST_PATH}")
+except Exception as e:
+    print(f"[WARN] 無法儲存模型到 {CKPT_LAST_PATH}: {e}")
+
+try:
+    dump(scaler, SCALER_LAST_PATH)
+    print(f"[INFO] 已儲存 StandardScaler(Last) 到：{SCALER_LAST_PATH}")
+except Exception as e:
+    print(f"[WARN] 無法儲存 scaler 到 {SCALER_LAST_PATH}: {e}")
+
+try:
+    with open(THRESHOLD_LAST_PATH, "w") as f:
+        f.write(str(thr))
+    print(f"[INFO] 已儲存決策門檻(Last)到：{THRESHOLD_LAST_PATH}")
+except Exception as e:
+    print(f"[WARN] 無法儲存門檻到 {THRESHOLD_LAST_PATH}: {e}")
+
+# 讀取歷來最佳的 val_loss
+prev_best = None
+if os.path.exists(BEST_META_PATH):
+    try:
+        prev_best = float(open(BEST_META_PATH).read().strip())
+    except Exception:
+        prev_best = None
+
+is_better = (prev_best is None) or (best_val < prev_best - 1e-12)
+
+if is_better:
+    # 覆蓋最佳檔（給線上/下游推論使用的穩定路徑）
+    try:
+        torch.save(model.state_dict(), CKPT_BEST_PATH)
+        print(f"[INFO] 已覆蓋最佳模型到：{CKPT_BEST_PATH}")
+    except Exception as e:
+        print(f"[WARN] 無法儲存最佳模型到 {CKPT_BEST_PATH}: {e}")
+
+    try:
+        dump(scaler, SCALER_BEST_PATH)
+        print(f"[INFO] 已覆蓋最佳 StandardScaler 到：{SCALER_BEST_PATH}")
+    except Exception as e:
+        print(f"[WARN] 無法儲存最佳 scaler 到 {SCALER_BEST_PATH}: {e}")
+
+    try:
+        with open(THRESHOLD_BEST_PATH, "w") as f:
+            f.write(str(thr))
+        print(f"[INFO] 已覆蓋最佳決策門檻到：{THRESHOLD_BEST_PATH}")
+    except Exception as e:
+        print(f"[WARN] 無法儲存最佳門檻到 {THRESHOLD_BEST_PATH}: {e}")
+
+    try:
+        open(BEST_META_PATH, "w").write(str(best_val))
+        print(f"[INFO] 已更新最佳紀錄（val_loss={best_val:.6f}）到：{BEST_META_PATH}")
+    except Exception as e:
+        print(f"[WARN] 無法更新最佳紀錄：{e}")
+else:
+    print(f"[INFO] 本輪未優於歷來最佳（prev_best={prev_best}, this={best_val:.6f}），不覆蓋最佳檔")
+
+# L) 在 Test 上評估（用 Val 選出的門檻）
+model.eval()
+with torch.no_grad():
+    logits_te = model(X_te_t).squeeze(1).cpu().numpy()
+    probs_te  = 1.0 / (1.0 + np.exp(-logits_te))
+    preds_te  = (probs_te >= thr).astype(int)
+
+print("\n=== 嚴謹切分成績（二元：非 APBT=0, APBT=1）===")
+print(classification_report(y_te, preds_te, digits=4))
+print("混淆矩陣：")
+print(confusion_matrix(y_te, preds_te))
+try:
+    auc = roc_auc_score(y_te, probs_te)
+    print(f"\nROC AUC: {auc:.4f}（陽性=APBT）")
+except Exception:
+    print("\nROC AUC: 無法計算")
+try:
+    print(f"Test log loss: {log_loss(y_te, probs_te, labels=[0,1]):.5f}")
+except Exception:
+    pass
+
+print(f"\n平均骨幹推論延遲（ms/張）: {avg_ms:.1f}")
