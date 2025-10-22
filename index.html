@@ -406,7 +406,7 @@
       let feedback = '';
       feedback += (brightness < BRIGHT_DARK) ? '亮度過暗 ' : (brightness > BRIGHT_BRIGHT) ? '亮度過亮 ' : '亮度適中 ';
       feedback += (sharpness < SHARP_BLUR) ? '畫面模糊' : (sharpness < SHARP_SOFT) ? '輕微模糊' : '畫面清晰';
-      qualityFeedback.textContent = `${feedback}（VoL=${sharpness.toFixed(1)}，Ȳ=${brightness.toFixed(1)}）`;
+      qualityFeedback.textContent = feedback;
       analysisFrameId = requestAnimationFrame(realTimeAnalysisLoop);
     }
 
