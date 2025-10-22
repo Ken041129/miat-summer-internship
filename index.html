@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>比特犬影像辨識系統 </title>
+  <title>比特犬影像辨識系統</title>
   <style>
     /* --- 整體佈景 --- */
     body {
@@ -153,8 +153,8 @@
       width: 100%; height: 100%;
       display: flex; align-items: center; justify-content: center;
       z-index: 5;
+      pointer-events: none;
     }
-    #guidance-overlay img { width: 80%; max-width: 500px; opacity: 0.4; }
     #quality-feedback {
       position: absolute; top: 20px; right: 20px;
       background: rgba(0, 0, 0, 0.5);
@@ -185,6 +185,18 @@
     .quality-ok   { background: #e8f5e9; color: #2e7d32; }
     .quality-warn { background: #fff3e0; color: #ef6c00; }
     .quality-bad  { background: #ffebee; color: #c62828; }
+
+    /* --- 新增：幽靈圖（你的 PNG/JPG） --- */
+    .ghost-img {
+      position: absolute;
+      left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      max-width: 75vmin;           /* 可依實際手機視角調整大小 */
+      opacity: 0.35;               /* 半透明疊在鏡頭上 */
+      display: none;               /* 由 JS 控制顯示 */
+      pointer-events: none;        /* 不攔截點擊 */
+      user-select: none;
+    }
   </style>
 </head>
 
@@ -236,8 +248,15 @@
   <div id="camera-view" role="dialog" aria-modal="true" aria-label="相機取景與拍照">
     <div id="camera-wrapper">
       <video id="camera" autoplay playsinline></video>
-      <div id="guidance-overlay"></div>
+
+      <!-- 用你的三張圖當引導幽靈 -->
+      <div id="guidance-overlay">
+        <img id="ghost-front" class="ghost-img" src="images/front_ghost.png" alt="正面引導圖">
+        <img id="ghost-side"  class="ghost-img" src="images/side_ghost.png"  alt="側面引導圖">
+        <img id="ghost-head"  class="ghost-img" src="images/head_ghost.png"  alt="頭部特寫引導圖">
+      </div>
     </div>
+
     <canvas id="canvas"></canvas>
     <canvas id="analysis-canvas"></canvas>
     <div id="camera-ui">
@@ -269,7 +288,6 @@
     const cameraTitle = document.getElementById('camera-title');
     const captureBtn = document.getElementById('capture-btn');
     const closeCameraBtn = document.getElementById('close-camera-btn');
-    const guidanceOverlay = document.getElementById('guidance-overlay');
     const qualityFeedback = document.getElementById('quality-feedback');
     const confirmDialog = document.getElementById('confirm-dialog');
     const confirmPreview = document.getElementById('confirm-preview');
@@ -292,20 +310,23 @@
 
     const BRIGHT_DARK = 60, BRIGHT_BRIGHT = 190, SHARP_BLUR = 20, SHARP_SOFT = 50;
 
-    /* ========= 新增：影像規格門檻（可調整） ========= */
+    /* ========= 影像規格門檻 ========= */
     const SPEC = {
-      minWidth: 640,              // 原圖解析度下限（寬）
-      minHeight: 640,             // 原圖解析度下限（高）
-      minSharpness: SHARP_SOFT,   // 清晰度下限（沿用 SHARP_SOFT=50）
-      minBrightness: BRIGHT_DARK, // 亮度下限（60）
-      maxBrightness: BRIGHT_BRIGHT// 亮度上限（190）
+      minWidth: 640, minHeight: 640,
+      minSharpness: SHARP_SOFT,
+      minBrightness: BRIGHT_DARK,
+      maxBrightness: BRIGHT_BRIGHT
     };
-    /* ========= 新增：品質結果儲存 ========= */
     const qualityData = { front: null, side: null, head: null };
 
-    /* ========= 新增：欄位中文標籤 ========= */
-    function labelOfType(t) {
-      return t === 'front' ? '正面照' : (t === 'side' ? '側面照' : '頭部特寫');
+    function labelOfType(t) { return t === 'front' ? '正面照' : (t === 'side' ? '側面照' : '頭部特寫'); }
+
+    // ★ 新增：切換顯示哪一張引導圖
+    function setGuidanceGhost(type) {
+      ['front','side','head'].forEach(t => {
+        const el = document.getElementById(`ghost-${t}`);
+        if (el) el.style.display = (t === type) ? 'block' : 'none';
+      });
     }
 
     // 品質提示元素
@@ -313,17 +334,12 @@
       const area = document.querySelector(`.upload-area input[data-type="${type}"]`)?.closest('.upload-area');
       if (!area) return null;
       let hint = area.querySelector('.quality-hint');
-      if (!hint) {
-        hint = document.createElement('div');
-        hint.className = 'quality-hint';
-        area.appendChild(hint);
-      }
+      if (!hint) { hint = document.createElement('div'); hint.className = 'quality-hint'; area.appendChild(hint); }
       return hint;
     }
 
     function setQualityHint(type, sharpness, brightness) {
-      const el = getQualityHintEl(type);
-      if (!el) return;
+      const el = getQualityHintEl(type); if (!el) return;
       let sharpText, sharpClass, brightText, brightClass;
       if (sharpness < SHARP_BLUR) { sharpText = '清晰度：過模糊'; sharpClass = 'quality-bad'; }
       else if (sharpness < SHARP_SOFT) { sharpText = '清晰度：略為模糊'; sharpClass = 'quality-warn'; }
@@ -398,7 +414,7 @@
       if (startingCamera || !type) return;
       startingCamera = true;
 
-      // ★ 將類型儲存在確認對話框上，作為最可靠的狀態來源
+      // 將類型儲存在確認對話框上
       confirmDialog.dataset.type = type;
 
       // 如果串流還在，直接重用
@@ -407,12 +423,13 @@
         confirmDialog.style.display = 'none';
         cameraView.style.display = 'block';
         cameraTitle.textContent = guidanceData[type].text;
+        setGuidanceGhost(type); // 顯示對應引導圖
         if (analysisFrameId == null) realTimeAnalysisLoop();
         startingCamera = false;
         return;
       }
 
-      // 否則，重新取得相機權限
+      // 重新取得相機權限
       if (!('mediaDevices' in navigator && 'getUserMedia' in navigator.mediaDevices)) {
         alert('抱歉，您的瀏覽器不支援相機功能。');
         startingCamera = false; return;
@@ -437,6 +454,7 @@
         analysisCanvas.width = 200;
         analysisCanvas.height = Math.max(1, Math.round(200 / aspect));
         cameraTitle.textContent = guidanceData[type].text;
+        setGuidanceGhost(type); // 顯示對應引導圖
         mainView.style.display = 'none';
         confirmDialog.style.display = 'none';
         cameraView.style.display = 'block';
@@ -464,7 +482,6 @@
       captureBtn.disabled = true;
     }
 
-    // 取得「目前顯示在確認視窗」那張圖的 blob
     async function getPreviewBlob() {
       if (capturedBlob) return capturedBlob;
       const src = confirmPreview.src || '';
@@ -475,7 +492,6 @@
       return null;
     }
 
-    // 拍照
     async function captureImage() {
       if (captureBtn.disabled || !isStreamActive(cameraStream)) {
         qualityFeedback.textContent = '相機尚未就緒，請稍候…';
@@ -511,7 +527,6 @@
       }, 'image/jpeg');
     }
 
-    // 上傳與預覽
     function updatePreview(type, data) {
       const previewEl = document.getElementById(`${type}-preview`);
       if (!previewEl) { console.warn('找不到預覽容器：', `${type}-preview`); return; }
@@ -524,7 +539,6 @@
       previewEl.appendChild(img);
     }
 
-    // 解析圖像品質（含原圖解析度）
     async function evaluateFileQuality(fileOrBlob) {
       const img = new Image();
       const url = URL.createObjectURL(fileOrBlob);
@@ -552,7 +566,7 @@
         updatePreview(type, file);
         evaluateFileQuality(file).then(({ sharpness, brightness, width, height }) => {
           setQualityHint(type, sharpness, brightness);
-          qualityData[type] = { sharpness, brightness, width, height }; // ★ 記錄品質
+          qualityData[type] = { sharpness, brightness, width, height };
         }).catch(() => {
           const el = getQualityHintEl(type);
           if (el) { el.className = 'quality-hint quality-warn'; el.textContent = '無法評估品質'; }
@@ -562,55 +576,38 @@
 
     // --- 事件綁定 ---
     document.querySelectorAll('.btn-camera').forEach(button => {
-      button.addEventListener('click', () => {
-        startCamera(button.dataset.type);
-      });
+      button.addEventListener('click', () => { startCamera(button.dataset.type); });
     });
     document.querySelectorAll('input[type=file]').forEach(input => input.addEventListener('change', handleFileUpload));
     captureBtn.addEventListener('click', captureImage);
     closeCameraBtn.addEventListener('click', stopCamera);
 
-    // ========== FIX START: 「重拍」按鈕的最終修正 ==========
+    // 重拍
     retakeBtn.addEventListener('click', () => {
-      // 從對話框讀取正確的類型
       const type = confirmDialog.dataset.type;
-      if (!type) {
-          alert('發生錯誤，找不到照片類型，請關閉後重試。');
-          return;
-      }
-      // 清理預覽資源
+      if (!type) { alert('發生錯誤，找不到照片類型，請關閉後重試。'); return; }
       if (confirmPreviewUrl) { URL.revokeObjectURL(confirmPreviewUrl); confirmPreviewUrl = null; }
       confirmPreview.removeAttribute('src');
       capturedBlob = null;
-      // 直接使用正確的類型重新啟動相機，這是最穩定的方法
       startCamera(type);
     });
-    // ========== FIX END ==========
 
-    // ========== FIX START: 「使用照片」按鈕的最終修正 ==========
+    // 使用照片
     confirmBtn.addEventListener('click', async () => {
       if (confirmBtn.disabled) return;
       confirmBtn.disabled = true;
       try {
-        // 直接從對話框讀取最可靠的類型
         const type = confirmDialog.dataset.type;
-        if (!type) {
-          confirmQualityText.textContent = "無法判定照片欄位，請重拍。";
-          confirmBtn.disabled = false; return;
-        }
-
+        if (!type) { confirmQualityText.textContent = "無法判定照片欄位，請重拍。"; confirmBtn.disabled = false; return; }
         const blob = await getPreviewBlob();
-        if (!blob) {
-          confirmQualityText.textContent = "照片尚未準備好，請重拍。";
-          confirmBtn.disabled = false; return;
-        }
+        if (!blob) { confirmQualityText.textContent = "照片尚未準備好，請重拍。"; confirmBtn.disabled = false; return; }
         imageData[type] = blob;
         updatePreview(type, blob);
 
         try {
           const { sharpness, brightness, width, height } = await evaluateFileQuality(blob);
           setQualityHint(type, sharpness, brightness);
-          qualityData[type] = { sharpness, brightness, width, height }; // ★ 記錄品質
+          qualityData[type] = { sharpness, brightness, width, height };
         } catch (e) {
           const el = getQualityHintEl(type);
           if (el) { el.className = 'quality-hint quality-warn'; el.textContent = '無法評估品質'; }
@@ -623,16 +620,12 @@
         confirmBtn.disabled = false;
       }
     });
-    // ========== FIX END ==========
 
-    /* ========= 新增：單張影像規格檢核 → 回傳不合格原因陣列（空=合格） ========= */
+    /* ========= 規格檢核 ========= */
     function checkAgainstSpec(type) {
       const q = qualityData[type];
       const reasons = [];
-      if (!q) {
-        reasons.push('尚未完成品質分析');
-        return reasons;
-      }
+      if (!q) { reasons.push('尚未完成品質分析'); return reasons; }
       if (q.width < SPEC.minWidth || q.height < SPEC.minHeight) {
         reasons.push(`解析度過低 (${q.width}×${q.height})，需 ≥ ${SPEC.minWidth}×${SPEC.minHeight}`);
       }
@@ -648,11 +641,10 @@
       return reasons;
     }
 
-    /* ========= 取代：開始辨識 → 先做硬性門檻，未過直接「無法辨識」 ========= */
+    // 開始辨識（模擬）
     document.getElementById('analyzeBtn').addEventListener('click', async () => {
       resultDiv.className = '';
 
-      // (1) 三張是否齊全
       const required = ['front', 'side', 'head'];
       const missing = required.filter(t => !imageData[t]);
       if (missing.length) {
@@ -661,7 +653,6 @@
         return;
       }
 
-      // (2) 確保三張都有品質資料，若沒有就補算
       try {
         const needsEval = required.filter(t => !qualityData[t]);
         if (needsEval.length) {
@@ -677,7 +668,6 @@
         return;
       }
 
-      // (3) 規格檢核（gating）
       const failed = [];
       required.forEach(t => {
         const reasons = checkAgainstSpec(t);
@@ -691,10 +681,9 @@
         ].join('<br>');
         resultDiv.innerHTML = html;
         resultDiv.classList.add('result-error');
-        return; // ★ 不進入辨識
+        return;
       }
 
-      // (4) 全數通過才進入（現階段沿用模擬邏輯）
       resultDiv.textContent = '影像規格符合，辨識中...';
       resultDiv.classList.add('result-processing');
 
