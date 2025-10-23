@@ -29,6 +29,7 @@
     }
 
     h1 { margin-top: 0; color: #333; }
+    h2 { margin-top: 0; color: #333; }
     p  { color: #555; }
 
     /* --- 上傳區域佈局 --- */
@@ -69,6 +70,9 @@
 
     .btn-upload { background: #ff8a65; }
     .btn-upload:hover { background: #ff7043; }
+    
+    .btn-analyze { background: #4db6ac; }
+    .btn-analyze:hover { background: #00897b; }
 
     /* --- 檔案選擇 (隱藏) --- */
     input[type=file] { display: none; }
@@ -88,19 +92,54 @@
     .preview img { width: 100%; height: 100%; object-fit: cover; }
     .preview span { font-size: 0.9rem; color: #aaa; }
 
-    /* --- 辨識按鈕 --- */
-    #analyzeBtn {
+    /* --- 主要動作按鈕 (確認上傳 / 開始辨識) --- */
+    .main-action-btn {
       margin-top: 2rem;
       padding: .75rem 2.5rem;
       border: none;
       border-radius: 9999px;
-      background: #4db6ac;
       color: #fff;
       font-size: 1.2rem;
       cursor: pointer;
       transition: background .3s;
     }
+    #confirmUploadBtn { background: #ff8a65; }
+    #confirmUploadBtn:hover { background: #ff7043; }
+    #analyzeBtn { background: #4db6ac; }
     #analyzeBtn:hover { background: #00897b; }
+
+
+    /* --- ★ 新增：調紐區塊 --- */
+    #toggle-view { display: none; }
+    
+    .toggle-container {
+      display: grid;
+      /* 讓標籤靠左，滑桿置中，數值靠右 */
+      grid-template-columns: auto 1fr auto; 
+      gap: 1rem 1.5rem;
+      align-items: center;
+      margin: 2rem 0;
+      text-align: left;
+    }
+    .toggle-container label {
+      font-weight: bold;
+      color: #333;
+      font-size: 1rem;
+    }
+    .toggle-container input[type=range] {
+      width: 100%;
+      cursor: pointer;
+    }
+    .slider-value {
+      font-weight: bold;
+      color: #1565c0;
+      min-width: 35px;
+      text-align: right;
+      font-family: monospace;
+      font-size: 1.1rem;
+    }
+    /* --- 結束新增 --- */
+
 
     /* --- 結果顯示 --- */
     #result {
@@ -191,10 +230,10 @@
       position: absolute;
       left: 50%; top: 50%;
       transform: translate(-50%, -50%);
-      max-width: 95vmin;           /* 可依實際手機視角調整大小 */
-      opacity: 0.35;               /* 半透明疊在鏡頭上 */
-      display: none;               /* 由 JS 控制顯示 */
-      pointer-events: none;        /* 不攔截點擊 */
+      max-width: 95vmin;      
+      opacity: 0.35;        
+      display: none;        
+      pointer-events: none;     
       user-select: none;
     }
   </style>
@@ -202,61 +241,81 @@
 
 <body>
 
-  <!-- 主要內容畫面 -->
   <div id="main-view" class="container">
-    <h1>比特犬影像辨識系統</h1>
-    <p>請為以下三個項目分別「拍攝照片」或「上傳檔案」。為確保辨識率，建議使用「拍攝」功能。</p>
 
-    <div class="upload-container">
-      <!-- 正面照 -->
-      <div class="upload-area">
-        <h3>1. 正面照</h3>
-        <div class="preview" id="front-preview"><span>預覽</span></div>
-        <div class="button-group">
-          <button class="btn btn-camera" data-type="front" aria-label="拍攝正面照">拍攝</button>
-          <label for="front-upload-input" class="btn btn-upload" aria-label="上傳正面照">上傳</label>
+    <div id="upload-view">
+      <h1>比特犬影像辨識系統</h1>
+      <p>請為以下三個項目分別「拍攝照片」或「上傳檔案」。為確保辨識率，建議使用「拍攝」功能。</p>
+
+      <div class="upload-container">
+        <div class="upload-area">
+          <h3>1. 正面照</h3>
+          <div class="preview" id="front-preview"><span>預覽</span></div>
+          <div class="button-group">
+            <button class="btn btn-camera" data-type="front" aria-label="拍攝正面照">拍攝</button>
+            <label for="front-upload-input" class="btn btn-upload" aria-label="上傳正面照">上傳</label>
+          </div>
+          <input type="file" id="front-upload-input" accept="image/*" data-type="front">
         </div>
-        <input type="file" id="front-upload-input" accept="image/*" data-type="front">
-      </div>
-      <!-- 側面照 -->
-      <div class="upload-area">
-        <h3>2. 側面照</h3>
-        <div class="preview" id="side-preview"><span>預覽</span></div>
-        <div class="button-group">
-          <button class="btn btn-camera" data-type="side" aria-label="拍攝側面照">拍攝</button>
-          <label for="side-upload-input" class="btn btn-upload" aria-label="上傳側面照">上傳</label>
+        <div class="upload-area">
+          <h3>2. 側面照</h3>
+          <div class="preview" id="side-preview"><span>預覽</span></div>
+          <div class="button-group">
+            <button class="btn btn-camera" data-type="side" aria-label="拍攝側面照">拍攝</button>
+            <label for="side-upload-input" class="btn btn-upload" aria-label="上傳側面照">上傳</label>
+          </div>
+          <input type="file" id="side-upload-input" accept="image/*" data-type="side">
         </div>
-        <input type="file" id="side-upload-input" accept="image/*" data-type="side">
-      </div>
-      <!-- 頭部特寫 -->
-      <div class="upload-area">
-        <h3>3. 頭部特寫</h3>
-        <div class="preview" id="head-preview"><span>預覽</span></div>
-        <div class="button-group">
-          <button class="btn btn-camera" data-type="head" aria-label="拍攝頭部特寫">拍攝</button>
-          <label for="head-upload-input" class="btn btn-upload" aria-label="上傳頭部特寫">上傳</label>
+        <div class="upload-area">
+          <h3>3. 頭部特寫</h3>
+          <div class="preview" id="head-preview"><span>預覽</span></div>
+          <div class="button-group">
+            <button class="btn btn-camera" data-type="head" aria-label="拍攝頭部特寫">拍攝</button>
+            <label for="head-upload-input" class="btn btn-upload" aria-label="上傳頭部特寫">上傳</label>
+          </div>
+          <input type="file" id="head-upload-input" accept="image/*" data-type="head">
         </div>
-        <input type="file" id="head-upload-input" accept="image/*" data-type="head">
       </div>
+
+      <button id="confirmUploadBtn" type="button" class="main-action-btn">確認上傳</button>
     </div>
 
-    <button id="analyzeBtn" type="button">開始辨識</button>
+    <div id="toggle-view">
+      <h2>影像可信度調整</h2>
+      <p>若照片中特定部位不清楚（例如受傷、被遮擋），請調低該項目的可信度。<br>(0.0 = 不可信, 1.0 = 完全可信)</p>
+      
+      <div class="toggle-container">
+        <label for="eye-toggle">眼睛 (BlueEyesForbidden)</label>
+        <input type="range" id="eye-toggle" min="0" max="1" step="0.1" value="1.0">
+        <span id="eye-toggle-value" class="slider-value">1.0</span>
+        
+        <label for="nose-toggle">鼻子 (BlackNoseRequired)</label>
+        <input type="range" id="nose-toggle" min="0" max="1" step="0.1" value="1.0">
+        <span id="nose-toggle-value" class="slider-value">1.0</span>
+
+        <label for="clothes-toggle">衣服/身體 (BodyWeight_norm)</label>
+        <input type="range" id="clothes-toggle" min="0" max="1" step="0.1" value="1.0">
+        <span id="clothes-toggle-value" class="slider-value">1.0</span>
+      </div>
+
+      <div class="button-group" style="justify-content: center; margin-top: 2rem;">
+        <button id="backToUploadBtn" class="btn btn-camera">返回</button>
+        <button id="analyzeBtn" type="button" class="btn btn-analyze main-action-btn" style="margin-top: 0;">開始辨識</button>
+      </div>
+    </div>
+    
     <div id="result"></div>
   </div>
 
-  <!-- 相機畫面 -->
   <div id="camera-view" role="dialog" aria-modal="true" aria-label="相機取景與拍照">
     <div id="camera-wrapper">
       <video id="camera" autoplay playsinline></video>
-
-      <!-- 用你的三張圖當引導幽靈 -->
       <div id="guidance-overlay">
         <img id="ghost-front" class="ghost-img" src="images/front_ghost.png" alt="正面引導圖">
         <img id="ghost-side"  class="ghost-img" src="images/side_ghost.png"  alt="側面引導圖">
         <img id="ghost-head"  class="ghost-img" src="images/head_ghost.png"  alt="頭部特寫引導圖">
       </div>
     </div>
-
     <canvas id="canvas"></canvas>
     <canvas id="analysis-canvas"></canvas>
     <div id="camera-ui">
@@ -267,7 +326,6 @@
     </div>
   </div>
 
-  <!-- 拍攝後確認彈窗 -->
   <div id="confirm-dialog" data-type="" role="dialog" aria-modal="true" aria-label="確認使用這張照片">
     <img id="confirm-preview" src="" alt="拍攝預覽">
     <p id="confirm-quality-text" style="color:white; margin-top:1rem;"></p>
@@ -295,6 +353,21 @@
     const retakeBtn = document.getElementById('retake-btn');
     const confirmQualityText = document.getElementById('confirm-quality-text');
 
+    // --- ★ 新增：畫面和按鈕的變數 ---
+    const uploadView = document.getElementById('upload-view');
+    const toggleView = document.getElementById('toggle-view');
+    const confirmUploadBtn = document.getElementById('confirmUploadBtn');
+    const analyzeBtn = document.getElementById('analyzeBtn'); // 這是新的辨識按鈕
+    const backToUploadBtn = document.getElementById('backToUploadBtn');
+    
+    // --- ★ 新增：調紐的變數 ---
+    const eyeToggle = document.getElementById('eye-toggle');
+    const noseToggle = document.getElementById('nose-toggle');
+    const clothesToggle = document.getElementById('clothes-toggle');
+    const eyeToggleValue = document.getElementById('eye-toggle-value');
+    const noseToggleValue = document.getElementById('nose-toggle-value');
+    const clothesToggleValue = document.getElementById('clothes-toggle-value');
+
     const imageData = { front: null, side: null, head: null };
     let cameraStream = null;
     let analysisFrameId = null;
@@ -309,8 +382,6 @@
     };
 
     const BRIGHT_DARK = 60, BRIGHT_BRIGHT = 190, SHARP_BLUR = 20, SHARP_SOFT = 50;
-
-    /* ========= 影像規格門檻 ========= */
     const SPEC = {
       minWidth: 640, minHeight: 640,
       minSharpness: SHARP_SOFT,
@@ -321,7 +392,6 @@
 
     function labelOfType(t) { return t === 'front' ? '正面照' : (t === 'side' ? '側面照' : '頭部特寫'); }
 
-    // ★ 新增：切換顯示哪一張引導圖
     function setGuidanceGhost(type) {
       ['front','side','head'].forEach(t => {
         const el = document.getElementById(`ghost-${t}`);
@@ -329,7 +399,6 @@
       });
     }
 
-    // 品質提示元素
     function getQualityHintEl(type) {
       const area = document.querySelector(`.upload-area input[data-type="${type}"]`)?.closest('.upload-area');
       if (!area) return null;
@@ -348,13 +417,12 @@
       else if (brightness > BRIGHT_BRIGHT) { brightText = '亮度：過亮'; brightClass = 'quality-bad'; }
       else { brightText = '亮度：適中'; brightClass = 'quality-ok'; }
       const levelClass = (sharpClass === 'quality-bad' || brightClass === 'quality-bad') ? 'quality-bad'
-                        : (sharpClass === 'quality-warn' || brightClass === 'quality-warn') ? 'quality-warn'
-                        : 'quality-ok';
+                       : (sharpClass === 'quality-warn' || brightClass === 'quality-warn') ? 'quality-warn'
+                       : 'quality-ok';
       el.className = `quality-hint ${levelClass}`;
-      el.textContent = `${sharpText}｜${brightText}（VoL=${sharpness.toFixed(1)}，Ȳ=${brightness.toFixed(1)}）`;
+      el.textContent = `${sharpText}｜${brightText}（VoL=${sharpness.toFixed(1)}，Ȳ=${brightness.toFixed(1)}）`;
     }
 
-    // 清晰度 / 亮度
     function calculateSharpness(ctx) {
       const w = ctx.canvas.width, h = ctx.canvas.height;
       const { data } = ctx.getImageData(0, 0, w, h);
@@ -384,7 +452,6 @@
       return sum / (w * h);
     }
 
-    // 流程輔助
     function isStreamActive(stream) {
       return !!(stream && stream.getTracks && stream.getTracks().some(t => t.readyState === 'live'));
     }
@@ -413,31 +480,23 @@
     async function startCamera(type) {
       if (startingCamera || !type) return;
       startingCamera = true;
-
-      // 將類型儲存在確認對話框上
       confirmDialog.dataset.type = type;
-
-      // 如果串流還在，直接重用
       if (isStreamActive(cameraStream)) {
         mainView.style.display = 'none';
         confirmDialog.style.display = 'none';
         cameraView.style.display = 'block';
         cameraTitle.textContent = guidanceData[type].text;
-        setGuidanceGhost(type); // 顯示對應引導圖
+        setGuidanceGhost(type);
         if (analysisFrameId == null) realTimeAnalysisLoop();
         startingCamera = false;
         return;
       }
-
-      // 重新取得相機權限
       if (!('mediaDevices' in navigator && 'getUserMedia' in navigator.mediaDevices)) {
         alert('抱歉，您的瀏覽器不支援相機功能。');
         startingCamera = false; return;
       }
-
       const primary = { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } };
       const fallback = { video: { facingMode: { ideal: 'user' }, width: { ideal: 1280 }, height: { ideal: 720 } } };
-
       try {
         cameraStream = await navigator.mediaDevices.getUserMedia(primary);
       } catch {
@@ -447,14 +506,13 @@
           stopCamera(); startingCamera = false; return;
         }
       }
-
       camera.srcObject = cameraStream;
       camera.onloadedmetadata = () => {
         const aspect = camera.videoWidth / camera.videoHeight || (16/9);
         analysisCanvas.width = 200;
         analysisCanvas.height = Math.max(1, Math.round(200 / aspect));
         cameraTitle.textContent = guidanceData[type].text;
-        setGuidanceGhost(type); // 顯示對應引導圖
+        setGuidanceGhost(type);
         mainView.style.display = 'none';
         confirmDialog.style.display = 'none';
         cameraView.style.display = 'block';
@@ -498,20 +556,16 @@
         return;
       }
       if (analysisFrameId != null) { cancelAnimationFrame(analysisFrameId); analysisFrameId = null; }
-
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       canvas.width = camera.videoWidth;
       canvas.height = camera.videoHeight;
-
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       ctx.drawImage(camera, 0, 0, canvas.width, canvas.height);
-
       const sharpness = calculateSharpness(ctx);
       const msg = (sharpness < SHARP_BLUR) ? "影像過於模糊，建議重拍。" :
-                  (sharpness < SHARP_SOFT) ? "影像略為模糊。" :
-                  "影像品質良好。";
+                    (sharpness < SHARP_SOFT) ? "影像略為模糊。" :
+                    "影像品質良好。";
       confirmQualityText.textContent = msg;
-
       canvas.toBlob(blob => {
         if (!blob) {
           confirmQualityText.textContent = "照片尚未準備好，請再試一次。";
@@ -574,54 +628,6 @@
       }
     }
 
-    // --- 事件綁定 ---
-    document.querySelectorAll('.btn-camera').forEach(button => {
-      button.addEventListener('click', () => { startCamera(button.dataset.type); });
-    });
-    document.querySelectorAll('input[type=file]').forEach(input => input.addEventListener('change', handleFileUpload));
-    captureBtn.addEventListener('click', captureImage);
-    closeCameraBtn.addEventListener('click', stopCamera);
-
-    // 重拍
-    retakeBtn.addEventListener('click', () => {
-      const type = confirmDialog.dataset.type;
-      if (!type) { alert('發生錯誤，找不到照片類型，請關閉後重試。'); return; }
-      if (confirmPreviewUrl) { URL.revokeObjectURL(confirmPreviewUrl); confirmPreviewUrl = null; }
-      confirmPreview.removeAttribute('src');
-      capturedBlob = null;
-      startCamera(type);
-    });
-
-    // 使用照片
-    confirmBtn.addEventListener('click', async () => {
-      if (confirmBtn.disabled) return;
-      confirmBtn.disabled = true;
-      try {
-        const type = confirmDialog.dataset.type;
-        if (!type) { confirmQualityText.textContent = "無法判定照片欄位，請重拍。"; confirmBtn.disabled = false; return; }
-        const blob = await getPreviewBlob();
-        if (!blob) { confirmQualityText.textContent = "照片尚未準備好，請重拍。"; confirmBtn.disabled = false; return; }
-        imageData[type] = blob;
-        updatePreview(type, blob);
-
-        try {
-          const { sharpness, brightness, width, height } = await evaluateFileQuality(blob);
-          setQualityHint(type, sharpness, brightness);
-          qualityData[type] = { sharpness, brightness, width, height };
-        } catch (e) {
-          const el = getQualityHintEl(type);
-          if (el) { el.className = 'quality-hint quality-warn'; el.textContent = '無法評估品質'; }
-        }
-        stopCamera();
-      } catch (err) {
-        console.error('使用照片流程發生錯誤:', err);
-        confirmQualityText.textContent = "發生錯誤，請重試。";
-      } finally {
-        confirmBtn.disabled = false;
-      }
-    });
-
-    /* ========= 規格檢核 ========= */
     function checkAgainstSpec(type) {
       const q = qualityData[type];
       const reasons = [];
@@ -641,8 +647,67 @@
       return reasons;
     }
 
-    // 開始辨識（模擬）
-    document.getElementById('analyzeBtn').addEventListener('click', async () => {
+    // --- 事件綁定 ---
+    document.querySelectorAll('.btn-camera').forEach(button => {
+      button.addEventListener('click', () => { startCamera(button.dataset.type); });
+    });
+    document.querySelectorAll('input[type=file]').forEach(input => input.addEventListener('change', handleFileUpload));
+    captureBtn.addEventListener('click', captureImage);
+    closeCameraBtn.addEventListener('click', stopCamera);
+    retakeBtn.addEventListener('click', () => {
+      const type = confirmDialog.dataset.type;
+      if (!type) { alert('發生錯誤，找不到照片類型，請關閉後重試。'); return; }
+      if (confirmPreviewUrl) { URL.revokeObjectURL(confirmPreviewUrl); confirmPreviewUrl = null; }
+      confirmPreview.removeAttribute('src');
+      capturedBlob = null;
+      startCamera(type);
+    });
+    confirmBtn.addEventListener('click', async () => {
+      if (confirmBtn.disabled) return;
+      confirmBtn.disabled = true;
+      try {
+        const type = confirmDialog.dataset.type;
+        if (!type) { confirmQualityText.textContent = "無法判定照片欄位，請重拍。"; confirmBtn.disabled = false; return; }
+        const blob = await getPreviewBlob();
+        if (!blob) { confirmQualityText.textContent = "照片尚未準備好，請重拍。"; confirmBtn.disabled = false; return; }
+        imageData[type] = blob;
+        updatePreview(type, blob);
+        try {
+          const { sharpness, brightness, width, height } = await evaluateFileQuality(blob);
+          setQualityHint(type, sharpness, brightness);
+          qualityData[type] = { sharpness, brightness, width, height };
+        } catch (e) {
+          const el = getQualityHintEl(type);
+          if (el) { el.className = 'quality-hint quality-warn'; el.textContent = '無法評估品質'; }
+        }
+        stopCamera();
+      } catch (err) {
+        console.error('使用照片流程發生錯誤:', err);
+        confirmQualityText.textContent = "發生錯誤，請重試。";
+      } finally {
+        confirmBtn.disabled = false;
+      }
+    });
+
+    // --- ★ 新增：調紐的連動事件 ---
+    function updateSliderValue(slider, output) {
+      output.textContent = parseFloat(slider.value).toFixed(1);
+    }
+    eyeToggle.addEventListener('input', () => updateSliderValue(eyeToggle, eyeToggleValue));
+    noseToggle.addEventListener('input', () => updateSliderValue(noseToggle, noseToggleValue));
+    clothesToggle.addEventListener('input', () => updateSliderValue(clothesToggle, clothesToggleValue));
+
+    // --- ★ 新增：返回按鈕事件 ---
+    backToUploadBtn.addEventListener('click', () => {
+      toggleView.style.display = 'none';
+      uploadView.style.display = 'block';
+      resultDiv.innerHTML = '';
+      resultDiv.className = '';
+    });
+
+
+    // --- ★ 修改：「確認上傳」按鈕事件 ---
+    confirmUploadBtn.addEventListener('click', async () => {
       resultDiv.className = '';
 
       const required = ['front', 'side', 'head'];
@@ -653,6 +718,7 @@
         return;
       }
 
+      // 檢查品質
       try {
         const needsEval = required.filter(t => !qualityData[t]);
         if (needsEval.length) {
@@ -684,9 +750,31 @@
         return;
       }
 
+      // --- 驗證成功！切換到調紐畫面 ---
+      resultDiv.innerHTML = '';
+      resultDiv.className = '';
+      uploadView.style.display = 'none';
+      toggleView.style.display = 'block';
+    });
+    
+    // --- ★ 新增：「開始辨識」按鈕事件 (包含亂數邏輯) ---
+    analyzeBtn.addEventListener('click', async () => {
+      
+      // 這裡可以讀取調紐的值，供未來串接使用
+      const eyeValue = parseFloat(eyeToggle.value);
+      const noseValue = parseFloat(noseToggle.value);
+      const clothesValue = parseFloat(clothesToggle.value);
+      
+      console.log('開始分析，調紐值為:', { 
+        eye_toggle: eyeValue, 
+        nose_toggle: noseValue, 
+        clothes_toggle: clothesValue 
+      });
+
       resultDiv.textContent = '影像規格符合，辨識中...';
       resultDiv.classList.add('result-processing');
 
+      // 模擬辨識 (您原本的亂數邏輯)
       setTimeout(() => {
         const HI = 0.8, LO = 0.3;
         const scores = { front: Math.random(), side: Math.random(), head: Math.random() };
@@ -701,7 +789,7 @@
           const msg = failedByScore.map((f,i)=>{
             const label = f.type==='front'?'正面照':f.type==='side'?'側面照':'頭部特寫';
             const reason = (f.score<LO)?`判斷為非比特犬 (信心度：${Math.round((1-f.score)*100)}%)`
-                                       :`模糊或特徵不明 (信心度：${Math.round(f.score*100)}%)`;
+                                      :`模糊或特徵不明 (信心度：${Math.round(f.score*100)}%)`;
             return `${i+1}. ${label} → ${reason}`;
           }).join('\n');
           resultDiv.innerHTML = `辨識未通過，請檢查下列圖片：<br>${msg.replace(/\n/g,'<br>')}`;
@@ -709,6 +797,7 @@
         }
       }, 1500);
     });
+
   </script>
 </body>
 </html>
