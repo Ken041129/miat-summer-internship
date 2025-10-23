@@ -109,27 +109,42 @@
     #analyzeBtn:hover { background: #00897b; }
 
 
-    /* --- ★ 新增：調紐區塊 --- */
+    /* --- 調紐區塊 (改良版) --- */
     #toggle-view { display: none; }
     
     .toggle-container {
       display: grid;
-      /* 讓標籤靠左，滑桿置中，數值靠右 */
-      grid-template-columns: auto 1fr auto; 
-      gap: 1rem 1.5rem;
+      /* 桌機/平板：三欄佈局（標籤 / 滑桿 / 數值） */
+      /* 用 10ch 讓標籤欄大約以 10 個字元寬度起跳，可依需求調大或調小 */
+      grid-template-columns: 10ch 1fr auto;
+      gap: 1rem 1.25rem;      /* row-gap / column-gap */
       align-items: center;
       margin: 2rem 0;
       text-align: left;
     }
+    
+    /* 重要：讓 grid 子元素願意縮小，不會把整列撐爆 */
+    .toggle-container > * {
+      min-width: 0;
+    }
+    
     .toggle-container label {
       font-weight: bold;
       color: #333;
       font-size: 1rem;
+      line-height: 1.3;
+      /* 若標籤字多，允許換行，避免把其它欄位擠壓到沒空間 */
+      white-space: normal;
+      align-self: start;
     }
+    
     .toggle-container input[type=range] {
       width: 100%;
       cursor: pointer;
+      /* iOS/Android 上增加可點擊高度，手指更好拖 */
+      height: 32px;
     }
+    
     .slider-value {
       font-weight: bold;
       color: #1565c0;
@@ -137,9 +152,28 @@
       text-align: right;
       font-family: monospace;
       font-size: 1.1rem;
+      justify-self: end;   /* 讓數值靠右對齊 */
     }
-    /* --- 結束新增 --- */
-
+    
+    /* --- 小螢幕（手機）改為單欄直排 --- */
+    @media (max-width: 520px) {
+      .toggle-container {
+        grid-template-columns: 1fr;    /* 只留一欄 */
+        gap: 0.5rem 0.75rem;           /* 行距略縮小 */
+      }
+      .toggle-container label {
+        grid-column: 1 / -1;           /* 標籤占整列 */
+        margin-top: 0.25rem;
+      }
+      .toggle-container input[type=range] {
+        grid-column: 1 / -1;           /* 滑桿占整列 */
+      }
+      .toggle-container .slider-value {
+        grid-column: 1 / -1;           /* 數值占整列 */
+        justify-self: end;              /* 放在右邊 */
+      }
+    }
+    
 
     /* --- 結果顯示 --- */
     #result {
